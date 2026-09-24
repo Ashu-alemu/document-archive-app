@@ -6,6 +6,7 @@ import type { DocumentFormValues, DocumentRecord, SelectedFile } from '../types/
 
 interface NativeFileInspection { file_name: string; mime_type: string; file_size: number; file_hash: string }
 interface NativeStoredFile { stored_file_name: string; file_path: string; file_size: number; file_hash: string; mime_type: string }
+interface NativeExtractedText { text: string | null; available: boolean; message: string | null }
 
 export async function chooseDocumentFile(): Promise<SelectedFile | null> {
   const selected = await open({ multiple: false, directory: false, filters: [{ name: 'Documents', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx', 'txt'] }] })
@@ -23,13 +24,21 @@ export async function saveDocument(values: DocumentFormValues, file: SelectedFil
   const month = values.document_date.slice(5, 7)
   const id = `DOC-${year}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
   const stored = await invoke<NativeStoredFile>('store_file', { sourcePath: file.sourcePath, documentId: id, documentType: values.document_type, year, month })
+  let extracted: NativeExtractedText
+  try {
+    extracted = await invoke<NativeExtractedText>('extract_document_text', { sourcePath: stored.file_path })
+  } catch (error) {
+    await invoke('remove_stored_file', { filePath: stored.file_path }).catch(() => undefined)
+    throw error
+  }
+  if (!extracted.available && extracted.message) console.warn(extracted.message)
   const now = new Date().toISOString()
   const record: DocumentRecord = {
     id, title, document_type: values.document_type, document_date: values.document_date,
     reference_number: values.reference_number.trim() || null, person_or_organization: values.person_or_organization.trim() || null,
     department: values.department.trim() || null, description: values.description.trim() || null, tags: values.tags.trim() || null,
     file_name: file.fileName, stored_file_name: stored.stored_file_name, file_path: stored.file_path,
-    mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, created_by: null,
+    mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, ocr_text: extracted.text, created_by: null,
     created_at: now, updated_at: now, status: 'active',
   }
   try { await insertDocument(record) } catch (error) {

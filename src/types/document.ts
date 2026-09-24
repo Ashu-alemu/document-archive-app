@@ -22,6 +22,7 @@ export interface DocumentRecord {
   mime_type: string | null
   file_size: number | null
   file_hash: string | null
+  ocr_text: string | null
   created_by: string | null
   created_at: string
   updated_at: string

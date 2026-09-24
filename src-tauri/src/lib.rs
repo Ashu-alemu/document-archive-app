@@ -4,6 +4,8 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -39,6 +41,13 @@ pub struct StoredFile {
     file_size: u64,
     file_hash: String,
     mime_type: String,
+}
+
+#[derive(Serialize)]
+pub struct ExtractedText {
+    text: Option<String>,
+    available: bool,
+    message: Option<String>,
 }
 
 fn allowed_extension(path: &Path) -> Option<&'static str> {
@@ -90,6 +99,148 @@ fn hash_file(path: &Path) -> Result<(u64, String), String> {
     Ok((size, hex::encode(hasher.finalize())))
 }
 
+fn command_text(command: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new(command)
+        .args(args)
+        .output()
+        .map_err(|error| format!("Unable to run {command}: {error}"))?;
+    if !output.status.success() {
+        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if details.is_empty() {
+            format!("{command} exited with status {}.", output.status)
+        } else {
+            format!("{command} failed: {details}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn text_pdf(path: &Path) -> Result<String, String> {
+    command_text(
+        "pdftotext",
+        &["-enc", "UTF-8", &path.to_string_lossy(), "-"],
+    )
+}
+
+fn ocr_image(path: &Path) -> Result<String, String> {
+    command_text("tesseract", &[&path.to_string_lossy(), "stdout"])
+}
+
+fn ocr_pdf(path: &Path) -> Result<String, String> {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Unable to create OCR workspace: {error}"))?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("document-archive-ocr-{suffix}"));
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create OCR workspace: {error}"))?;
+    let prefix = directory.join("page");
+    let result = (|| {
+        command_text(
+            "pdftoppm",
+            &[
+                "-png",
+                "-r",
+                "200",
+                &path.to_string_lossy(),
+                &prefix.to_string_lossy(),
+            ],
+        )?;
+        let mut pages = fs::read_dir(&directory)
+            .map_err(|error| format!("Unable to read OCR workspace: {error}"))?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|page| page.extension().is_some_and(|extension| extension == "png"))
+            .collect::<Vec<_>>();
+        pages.sort();
+        let mut text = String::new();
+        for page in pages {
+            let page_text = ocr_image(&page)?;
+            if !page_text.is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&page_text);
+            }
+        }
+        Ok(text)
+    })();
+    let _ = fs::remove_dir_all(&directory);
+    result
+}
+
+fn extract_text(path: &Path) -> Result<ExtractedText, String> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension == "pdf" {
+        match text_pdf(path) {
+            Ok(text) if !text.is_empty() => {
+                return Ok(ExtractedText {
+                    text: Some(text),
+                    available: true,
+                    message: None,
+                });
+            }
+            Ok(_) => {}
+            Err(error) if !error.contains("Unable to run pdftotext") => return Err(error),
+            Err(_) => {}
+        }
+        return match ocr_pdf(path) {
+            Ok(text) if !text.is_empty() => Ok(ExtractedText {
+                text: Some(text),
+                available: true,
+                message: None,
+            }),
+            Ok(_) => Ok(ExtractedText {
+                text: None,
+                available: true,
+                message: Some("No text was detected.".into()),
+            }),
+            Err(error)
+                if error.contains("Unable to run tesseract")
+                    || error.contains("Unable to run pdftoppm") =>
+            {
+                Ok(ExtractedText {
+                    text: None,
+                    available: false,
+                    message: Some(
+                        "OCR tools are not installed; scanned PDF OCR was skipped.".into(),
+                    ),
+                })
+            }
+            Err(error) => Err(error),
+        };
+    }
+    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return Ok(ExtractedText {
+            text: None,
+            available: true,
+            message: None,
+        });
+    }
+    match ocr_image(path) {
+        Ok(text) if !text.is_empty() => Ok(ExtractedText {
+            text: Some(text),
+            available: true,
+            message: None,
+        }),
+        Ok(_) => Ok(ExtractedText {
+            text: None,
+            available: true,
+            message: Some("No text was detected.".into()),
+        }),
+        Err(error) if error.contains("Unable to run tesseract") => Ok(ExtractedText {
+            text: None,
+            available: false,
+            message: Some("Tesseract is not installed; image OCR was skipped.".into()),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
 fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -127,6 +278,11 @@ fn inspect_file(source_path: String) -> Result<FileInspection, String> {
         file_size,
         file_hash,
     })
+}
+
+#[tauri::command]
+fn extract_document_text(source_path: String) -> Result<ExtractedText, String> {
+    extract_text(Path::new(&source_path))
 }
 
 #[tauri::command]
@@ -190,12 +346,20 @@ fn remove_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![Migration {
-        version: 1,
-        description: "create_documents",
-        sql: include_str!("../migrations/0001_create_documents.sql"),
-        kind: MigrationKind::Up,
-    }];
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description: "create_documents",
+            sql: include_str!("../migrations/0001_create_documents.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "add_ocr_text",
+            sql: include_str!("../migrations/0002_add_ocr_text.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
     tauri::Builder::default()
         .setup(|app| {
             ensure_directories(app.handle()).map_err(|error| {
@@ -219,6 +383,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             inspect_file,
+            extract_document_text,
             store_file,
             remove_stored_file
         ])

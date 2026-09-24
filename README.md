@@ -19,6 +19,7 @@ Requirements:
 - pnpm 11+
 - Rust 1.77.2+ and Cargo
 - Linux Tauri prerequisites: `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, and a font package
+- OCR prerequisites: `tesseract-ocr` with the required language data and `poppler-utils` for PDF text extraction and scanned-PDF page rendering
 
 Install JavaScript dependencies and run the browser preview:
 
@@ -95,7 +96,11 @@ SQLite stores document metadata, including title, date, type, reference number, 
 
 This phase adds document selection, extension and size validation, SHA-256 hashing, duplicate detection, managed filesystem storage, metadata insertion, document listing, parameterized search/filtering, details, metadata editing, OS-default file opening, and archive status without permanent deletion.
 
-Intentionally postponed: authentication, roles and permissions UI, OCR, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
+Intentionally postponed: authentication, roles and permissions UI, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
+
+## Phase 4 OCR and text search
+
+When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.
 
 ## Git and private data
 

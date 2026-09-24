@@ -12,12 +12,12 @@ export async function findDocuments(options: { search?: string; type?: string; f
   return database.select<DocumentRecord[]>(
     `SELECT * FROM documents
      WHERE (? = 'all' OR status = ?)
-       AND (? = '' OR title LIKE ? OR reference_number LIKE ? OR person_or_organization LIKE ? OR department LIKE ? OR description LIKE ? OR tags LIKE ? OR file_name LIKE ?)
+       AND (? = '' OR title LIKE ? OR reference_number LIKE ? OR person_or_organization LIKE ? OR department LIKE ? OR description LIKE ? OR tags LIKE ? OR file_name LIKE ? OR ocr_text LIKE ?)
        AND (? = '' OR document_type = ?)
        AND (? = '' OR document_date >= ?)
        AND (? = '' OR document_date <= ?)
      ORDER BY document_date DESC, created_at DESC`,
-    [status, status, search, term, term, term, term, term, term, term, type, type, from, from, to, to],
+    [status, status, search, term, term, term, term, term, term, term, term, type, type, from, from, to, to],
   )
 }
 
@@ -36,9 +36,9 @@ export async function findDocumentByHash(fileHash: string): Promise<DocumentReco
 export async function insertDocument(record: DocumentRecord): Promise<void> {
   const database = await openDatabase()
   await database.execute(
-    `INSERT INTO documents (id, title, document_type, document_date, reference_number, person_or_organization, department, description, tags, file_name, stored_file_name, file_path, mime_type, file_size, file_hash, created_by, created_at, updated_at, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [record.id, record.title, record.document_type, record.document_date, record.reference_number, record.person_or_organization, record.department, record.description, record.tags, record.file_name, record.stored_file_name, record.file_path, record.mime_type, record.file_size, record.file_hash, record.created_by, record.created_at, record.updated_at, record.status],
+    `INSERT INTO documents (id, title, document_type, document_date, reference_number, person_or_organization, department, description, tags, file_name, stored_file_name, file_path, mime_type, file_size, file_hash, ocr_text, created_by, created_at, updated_at, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [record.id, record.title, record.document_type, record.document_date, record.reference_number, record.person_or_organization, record.department, record.description, record.tags, record.file_name, record.stored_file_name, record.file_path, record.mime_type, record.file_size, record.file_hash, record.ocr_text, record.created_by, record.created_at, record.updated_at, record.status],
   )
 }
 
