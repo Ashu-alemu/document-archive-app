@@ -46,6 +46,7 @@ pub struct StoredFile {
 #[derive(Serialize)]
 pub struct ExtractedText {
     text: Option<String>,
+    status: String,
     available: bool,
     message: Option<String>,
 }
@@ -180,6 +181,7 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
             Ok(text) if !text.is_empty() => {
                 return Ok(ExtractedText {
                     text: Some(text),
+                    status: "completed".into(),
                     available: true,
                     message: None,
                 });
@@ -191,11 +193,13 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
         return match ocr_pdf(path) {
             Ok(text) if !text.is_empty() => Ok(ExtractedText {
                 text: Some(text),
+                status: "completed".into(),
                 available: true,
                 message: None,
             }),
             Ok(_) => Ok(ExtractedText {
                 text: None,
+                status: "completed".into(),
                 available: true,
                 message: Some("No text was detected.".into()),
             }),
@@ -205,6 +209,7 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
             {
                 Ok(ExtractedText {
                     text: None,
+                    status: "skipped".into(),
                     available: false,
                     message: Some(
                         "OCR tools are not installed; scanned PDF OCR was skipped.".into(),
@@ -217,6 +222,7 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
     if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp") {
         return Ok(ExtractedText {
             text: None,
+            status: "skipped".into(),
             available: true,
             message: None,
         });
@@ -224,16 +230,19 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
     match ocr_image(path) {
         Ok(text) if !text.is_empty() => Ok(ExtractedText {
             text: Some(text),
+            status: "completed".into(),
             available: true,
             message: None,
         }),
         Ok(_) => Ok(ExtractedText {
             text: None,
+            status: "completed".into(),
             available: true,
             message: Some("No text was detected.".into()),
         }),
         Err(error) if error.contains("Unable to run tesseract") => Ok(ExtractedText {
             text: None,
+            status: "skipped".into(),
             available: false,
             message: Some("Tesseract is not installed; image OCR was skipped.".into()),
         }),
@@ -344,6 +353,20 @@ fn remove_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
+    let root = storage_root(&app)?;
+    let path = PathBuf::from(&file_path);
+    if !path.starts_with(&root) {
+        return Err("Refusing to open a file outside managed storage.".into());
+    }
+    if !path.is_file() {
+        return Err("The archived file no longer exists.".into());
+    }
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|error| format!("Unable to open archived file: {error}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let migrations = vec![
@@ -357,6 +380,12 @@ pub fn run() {
             version: 2,
             description: "add_ocr_text",
             sql: include_str!("../migrations/0002_add_ocr_text.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "add_ocr_status",
+            sql: include_str!("../migrations/0003_add_ocr_status.sql"),
             kind: MigrationKind::Up,
         },
     ];
@@ -385,7 +414,8 @@ pub fn run() {
             inspect_file,
             extract_document_text,
             store_file,
-            remove_stored_file
+            remove_stored_file,
+            open_stored_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

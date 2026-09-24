@@ -5,6 +5,7 @@ export const DOCUMENT_TYPES = [
 
 export type DocumentType = (typeof DOCUMENT_TYPES)[number]
 export type DocumentStatus = 'active' | 'archived'
+export type OcrStatus = 'completed' | 'skipped' | 'failed'
 
 export interface DocumentRecord {
   id: string
@@ -23,6 +24,7 @@ export interface DocumentRecord {
   file_size: number | null
   file_hash: string | null
   ocr_text: string | null
+  ocr_status: OcrStatus
   created_by: string | null
   created_at: string
   updated_at: string

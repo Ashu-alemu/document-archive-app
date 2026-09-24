@@ -1,12 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { openPath } from '@tauri-apps/plugin-opener'
 import { archiveDocument, findDocumentByHash, insertDocument, updateDocument } from '../database/documentRepository'
 import type { DocumentFormValues, DocumentRecord, SelectedFile } from '../types/document'
 
 interface NativeFileInspection { file_name: string; mime_type: string; file_size: number; file_hash: string }
 interface NativeStoredFile { stored_file_name: string; file_path: string; file_size: number; file_hash: string; mime_type: string }
-interface NativeExtractedText { text: string | null; available: boolean; message: string | null }
+interface NativeExtractedText { text: string | null; status: 'completed' | 'skipped' | 'failed'; available: boolean; message: string | null }
 
 export async function chooseDocumentFile(): Promise<SelectedFile | null> {
   const selected = await open({ multiple: false, directory: false, filters: [{ name: 'Documents', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx', 'txt'] }] })
@@ -28,8 +27,8 @@ export async function saveDocument(values: DocumentFormValues, file: SelectedFil
   try {
     extracted = await invoke<NativeExtractedText>('extract_document_text', { sourcePath: stored.file_path })
   } catch (error) {
-    await invoke('remove_stored_file', { filePath: stored.file_path }).catch(() => undefined)
-    throw error
+    console.error('OCR failed; preserving the archived document:', error)
+    extracted = { text: null, status: 'failed', available: false, message: error instanceof Error ? error.message : String(error) }
   }
   if (!extracted.available && extracted.message) console.warn(extracted.message)
   const now = new Date().toISOString()
@@ -38,7 +37,7 @@ export async function saveDocument(values: DocumentFormValues, file: SelectedFil
     reference_number: values.reference_number.trim() || null, person_or_organization: values.person_or_organization.trim() || null,
     department: values.department.trim() || null, description: values.description.trim() || null, tags: values.tags.trim() || null,
     file_name: file.fileName, stored_file_name: stored.stored_file_name, file_path: stored.file_path,
-    mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, ocr_text: extracted.text, created_by: null,
+    mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, ocr_text: extracted.text, ocr_status: extracted.status, created_by: null,
     created_at: now, updated_at: now, status: 'active',
   }
   try { await insertDocument(record) } catch (error) {
@@ -48,7 +47,15 @@ export async function saveDocument(values: DocumentFormValues, file: SelectedFil
   return record
 }
 
-export async function openDocumentFile(document: DocumentRecord): Promise<void> { await openPath(document.file_path) }
+export async function openDocumentFile(document: DocumentRecord): Promise<void> {
+  try {
+    await invoke('open_stored_file', { filePath: document.file_path })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('Failed to open archived file:', error)
+    throw new Error(message)
+  }
+}
 export async function archiveDocumentRecord(id: string): Promise<void> { await archiveDocument(id) }
 export async function editDocument(id: string, values: DocumentFormValues & { status: DocumentRecord['status'] }): Promise<void> { await updateDocument(id, values) }
 
