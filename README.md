@@ -51,12 +51,12 @@ pnpm exec tsc -b
 
 ```text
 src/
-├── components/       # Reusable UI components (reserved)
-├── pages/            # Feature pages (reserved)
+├── components/       # Document form, list, details, and filters
+├── pages/            # Feature pages (reserved for future extraction)
 ├── layouts/          # Shared layouts (reserved)
-├── services/         # Application services (reserved)
-├── database/         # SQLite connection and future queries
-├── types/            # Shared domain types (reserved)
+├── services/         # File selection, storage, and opening services
+├── database/         # SQLite connection and document repository
+├── types/            # Document domain types
 ├── utils/            # Small utilities (reserved)
 ├── hooks/            # React hooks (reserved)
 └── assets/           # Frontend assets
@@ -83,17 +83,19 @@ Application Data/
 └── logs/
 ```
 
-The SQL connection module uses `sqlite:database/documents.db`. The Tauri SQL plugin resolves this relative path under the app’s OS-specific application-data/config location, not the source repository. The folders above are a future storage design and are not created or populated in Phase 2.
+The SQL connection module uses `sqlite:database/documents.db`. The Tauri SQL plugin resolves this relative path under the app’s OS-specific application-data/config location, not the source repository. On Linux this is currently under `~/.config/com.documentarchive.app/`; the equivalent OS-specific application-data directory is used elsewhere.
+
+At startup, the Rust layer creates the database, storage category, thumbnails, backups, and logs directories. Documents are copied into `storage/<category>/<year>/<month>/` using a generated managed filename. A temporary copy is finalized before its metadata is inserted into SQLite.
 
 ## Database architecture
 
-SQLite is reserved for document metadata: titles, dates, types, reference numbers, people or organizations, tags, OCR text, file paths, and future audit fields. The final schema and migrations are intentionally postponed. Phase 2 only opens and closes the connection to verify the foundation.
+SQLite stores document metadata, including title, date, type, reference number, organization, department, description, tags, original/stored filenames, path, MIME type, size, SHA-256 hash, timestamps, and active/archived status. Migration `src-tauri/migrations/0001_create_documents.sql` creates the `documents` table and indexes for status, type, date, and file hash. Document binaries are never stored in SQLite.
 
-## Phase 2 scope
+## Phase 3 scope
 
-This phase includes the Tauri/React/Vite foundation, the configured SQLite plugin, a small connection test, Git hygiene, a placeholder desktop UI, and the documented storage design.
+This phase adds document selection, extension and size validation, SHA-256 hashing, duplicate detection, managed filesystem storage, metadata insertion, document listing, parameterized search/filtering, details, metadata editing, OS-default file opening, and archive status without permanent deletion.
 
-Intentionally postponed: authentication, roles and permissions, document upload/import, OCR, search implementation, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
+Intentionally postponed: authentication, roles and permissions UI, OCR, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
 
 ## Git and private data
 
