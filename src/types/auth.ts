@@ -4,7 +4,7 @@ export interface UserRecord {
   id: string
   username: string
   display_name: string
-  password_hash: string
+  password_hash?: string
   active: number
   created_at: string
   updated_at: string
@@ -14,12 +14,15 @@ export interface UserRecord {
 }
 
 export interface SessionUser {
+  token: string
   id: string
   username: string
   displayName: string
   role: RoleId
   roleName: string
 }
+
+export interface AuditLogRecord { id: string; user_id: string | null; username: string | null; action: string; entity_type: string; entity_id: string | null; details: string | null; created_at: string }
 
 export const ROLE_OPTIONS: { id: RoleId; label: string; description: string }[] = [
   { id: 'admin', label: 'Administrator', description: 'Full access, including users and settings.' },

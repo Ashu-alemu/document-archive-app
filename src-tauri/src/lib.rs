@@ -1,7 +1,5 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use argon2::{password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString}, Argon2};
-use rand::rngs::OsRng;
 use std::{
     fs,
     io::Read,
@@ -9,8 +7,12 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+mod document_commands;
+mod security;
+use security::{actor, require, SessionState};
 
 const DATABASE_URL: &str = "sqlite:database/documents.db";
 const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
@@ -252,7 +254,7 @@ fn extract_text(path: &Path) -> Result<ExtractedText, String> {
     }
 }
 
-fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
         .map(|path| path.join("storage"))
@@ -292,19 +294,27 @@ fn inspect_file(source_path: String) -> Result<FileInspection, String> {
 }
 
 #[tauri::command]
-fn extract_document_text(source_path: String) -> Result<ExtractedText, String> {
+fn extract_document_text(app: AppHandle, state: State<'_, SessionState>, token: String, source_path: String) -> Result<ExtractedText, String> {
+    let connection = security::database_connection(&app)?;
+    let current = actor(&connection, &state, &token)?;
+    require(&current, "view")?;
     extract_text(Path::new(&source_path))
 }
 
 #[tauri::command]
 fn store_file(
     app: AppHandle,
+    state: State<'_, SessionState>,
+    token: String,
     source_path: String,
     document_id: String,
     document_type: String,
     year: String,
     month: String,
 ) -> Result<StoredFile, String> {
+    let connection = security::database_connection(&app)?;
+    let current = actor(&connection, &state, &token)?;
+    require(&current, "create")?;
     let source = PathBuf::from(&source_path);
     let mime_type =
         allowed_extension(&source).ok_or_else(|| "Unsupported file type.".to_string())?;
@@ -342,7 +352,10 @@ fn store_file(
 }
 
 #[tauri::command]
-fn remove_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
+fn remove_stored_file(app: AppHandle, state: State<'_, SessionState>, token: String, file_path: String) -> Result<(), String> {
+    let connection = security::database_connection(&app)?;
+    let current = actor(&connection, &state, &token)?;
+    require(&current, "create")?;
     let root = storage_root(&app)?;
     let path = PathBuf::from(&file_path);
     if !path.starts_with(&root) {
@@ -353,39 +366,6 @@ fn remove_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
             .map_err(|error| format!("Unable to clean up copied file: {error}"))?;
     }
     Ok(())
-}
-
-#[tauri::command]
-fn open_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
-    let root = storage_root(&app)?;
-    let path = PathBuf::from(&file_path);
-    if !path.starts_with(&root) {
-        return Err("Refusing to open a file outside managed storage.".into());
-    }
-    if !path.is_file() {
-        return Err("The archived file no longer exists.".into());
-    }
-    tauri_plugin_opener::open_path(&path, None::<&str>)
-        .map_err(|error| format!("Unable to open archived file: {error}"))
-}
-
-#[tauri::command]
-fn hash_password(password: String) -> Result<String, String> {
-    if password.chars().count() < 12 {
-        return Err("Password must be at least 12 characters.".into());
-    }
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|error| format!("Unable to protect password: {error}"))
-}
-
-#[tauri::command]
-fn verify_password(password: String, password_hash: String) -> Result<bool, String> {
-    let parsed = PasswordHash::new(&password_hash)
-        .map_err(|error| format!("Invalid stored password hash: {error}"))?;
-    Ok(Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -415,8 +395,15 @@ pub fn run() {
             sql: include_str!("../migrations/0004_add_authentication.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "add_audit_logs",
+            sql: include_str!("../migrations/0005_add_audit_logs.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
     tauri::Builder::default()
+        .manage(SessionState::default())
         .setup(|app| {
             ensure_directories(app.handle()).map_err(|error| {
                 Box::new(std::io::Error::other(error.to_string())) as Box<dyn std::error::Error>
@@ -438,13 +425,28 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            security::auth_status,
+            security::setup_admin,
+            security::login,
+            security::logout,
+            security::list_users,
+            security::create_user,
+            security::update_user,
+            security::change_user_role,
+            security::delete_user,
+            security::change_password,
+            security::get_audit_logs,
+            document_commands::find_documents,
+            document_commands::find_document_by_id,
+            document_commands::find_document_by_hash,
+            document_commands::insert_document,
+            document_commands::update_document,
+            document_commands::delete_document,
+            document_commands::open_document,
             inspect_file,
             extract_document_text,
             store_file,
-            remove_stored_file,
-            open_stored_file,
-            hash_password,
-            verify_password
+            remove_stored_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

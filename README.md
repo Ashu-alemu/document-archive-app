@@ -104,6 +104,21 @@ The application now requires a local account. On first launch, the setup wizard 
 
 The local roles are Administrator, Manager, Contributor, and Viewer. Administrators can create additional users from Settings. Viewers can search, inspect, and open documents; contributors and managers can add/edit/archive documents; administrators also manage users. Existing document metadata, filesystem storage, OCR, and search migrations remain unchanged.
 
+## Phase 6 security, authorization, and audit logging
+
+Phase 6 makes Rust/Tauri the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.
+
+| Role | Documents | Users | Audit logs |
+| --- | --- | --- | --- |
+| Administrator | Full access | Create, update, delete, role/password changes | Read |
+| Manager | Create, edit, delete, view, search, open | None | None |
+| Contributor | Create, edit, view, search, open | None | None |
+| Viewer | View, search, open | None | None |
+
+Migration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create `login_success`, `login_failed`, `logout`, `document_created`, `document_updated`, `document_deleted`, `document_opened`, `user_created`, `user_updated`, `user_deleted`, `user_role_changed`, and `password_changed` events. Passwords and authentication secrets are never included in audit details.
+
+Administrators have an Audit logs screen with action filtering, loading/error/empty states, and 25-record pagination. To test manually, create users for each role, sign in separately, attempt both allowed and forbidden document/user/audit actions, and confirm forbidden requests return backend authorization errors even when invoked outside the visible controls. Run `pnpm lint`, `pnpm build`, and `cargo test`/`cargo check` before packaging.
+
 ## Phase 4 OCR and text search
 
 When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.

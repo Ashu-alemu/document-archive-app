@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { archiveDocument, findDocumentByHash, insertDocument, updateDocument } from '../database/documentRepository'
+import { archiveDocument, deleteDocument, findDocumentByHash, insertDocument, updateDocument } from '../database/documentRepository'
 import type { DocumentFormValues, DocumentRecord, SelectedFile } from '../types/document'
 
 interface NativeFileInspection { file_name: string; mime_type: string; file_size: number; file_hash: string }
@@ -14,18 +14,18 @@ export async function chooseDocumentFile(): Promise<SelectedFile | null> {
   return { sourcePath: selected, fileName: inspection.file_name, mimeType: inspection.mime_type, fileSize: inspection.file_size, fileHash: inspection.file_hash }
 }
 
-export async function saveDocument(values: DocumentFormValues, file: SelectedFile): Promise<DocumentRecord> {
+export async function saveDocument(token: string, values: DocumentFormValues, file: SelectedFile): Promise<DocumentRecord> {
   const title = values.title.trim()
   if (!title || !values.document_date || !values.document_type) throw new Error('Title, document type, and document date are required.')
-  const duplicate = await findDocumentByHash(file.fileHash)
+  const duplicate = await findDocumentByHash(token, file.fileHash)
   if (duplicate) throw new Error(`DUPLICATE:${duplicate.id}`)
   const year = values.document_date.slice(0, 4)
   const month = values.document_date.slice(5, 7)
   const id = `DOC-${year}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
-  const stored = await invoke<NativeStoredFile>('store_file', { sourcePath: file.sourcePath, documentId: id, documentType: values.document_type, year, month })
+  const stored = await invoke<NativeStoredFile>('store_file', { token, sourcePath: file.sourcePath, documentId: id, documentType: values.document_type, year, month })
   let extracted: NativeExtractedText
   try {
-    extracted = await invoke<NativeExtractedText>('extract_document_text', { sourcePath: stored.file_path })
+    extracted = await invoke<NativeExtractedText>('extract_document_text', { token, sourcePath: stored.file_path })
   } catch (error) {
     console.error('OCR failed; preserving the archived document:', error)
     extracted = { text: null, status: 'failed', available: false, message: error instanceof Error ? error.message : String(error) }
@@ -40,24 +40,25 @@ export async function saveDocument(values: DocumentFormValues, file: SelectedFil
     mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, ocr_text: extracted.text, ocr_status: extracted.status, created_by: null,
     created_at: now, updated_at: now, status: 'active',
   }
-  try { await insertDocument(record) } catch (error) {
-    await invoke('remove_stored_file', { filePath: stored.file_path }).catch(() => undefined)
+  try { await insertDocument(token, record) } catch (error) {
+    await invoke('remove_stored_file', { token, filePath: stored.file_path }).catch(() => undefined)
     throw error
   }
   return record
 }
 
-export async function openDocumentFile(document: DocumentRecord): Promise<void> {
+export async function openDocumentFile(token: string, document: DocumentRecord): Promise<void> {
   try {
-    await invoke('open_stored_file', { filePath: document.file_path })
+    await invoke('open_document', { token, id: document.id })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('Failed to open archived file:', error)
     throw new Error(message)
   }
 }
-export async function archiveDocumentRecord(id: string): Promise<void> { await archiveDocument(id) }
-export async function editDocument(id: string, values: DocumentFormValues & { status: DocumentRecord['status'] }): Promise<void> { await updateDocument(id, values) }
+export async function archiveDocumentRecord(token: string, document: DocumentRecord): Promise<void> { await archiveDocument(token, document) }
+export async function deleteDocumentRecord(token: string, id: string): Promise<void> { await deleteDocument(token, id) }
+export async function editDocument(token: string, id: string, values: DocumentFormValues & { status: DocumentRecord['status'] }): Promise<void> { await updateDocument(token, id, values) }
 
 export function formatFileSize(bytes: number | null): string {
   if (bytes === null || bytes === 0) return '—'
