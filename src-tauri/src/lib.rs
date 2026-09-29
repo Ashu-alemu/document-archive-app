@@ -1,5 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use argon2::{password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString}, Argon2};
+use rand::rngs::OsRng;
 use std::{
     fs,
     io::Read,
@@ -367,6 +369,25 @@ fn open_stored_file(app: AppHandle, file_path: String) -> Result<(), String> {
         .map_err(|error| format!("Unable to open archived file: {error}"))
 }
 
+#[tauri::command]
+fn hash_password(password: String) -> Result<String, String> {
+    if password.chars().count() < 12 {
+        return Err("Password must be at least 12 characters.".into());
+    }
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|error| format!("Unable to protect password: {error}"))
+}
+
+#[tauri::command]
+fn verify_password(password: String, password_hash: String) -> Result<bool, String> {
+    let parsed = PasswordHash::new(&password_hash)
+        .map_err(|error| format!("Invalid stored password hash: {error}"))?;
+    Ok(Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let migrations = vec![
@@ -386,6 +407,12 @@ pub fn run() {
             version: 3,
             description: "add_ocr_status",
             sql: include_str!("../migrations/0003_add_ocr_status.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "add_authentication",
+            sql: include_str!("../migrations/0004_add_authentication.sql"),
             kind: MigrationKind::Up,
         },
     ];
@@ -415,7 +442,9 @@ pub fn run() {
             extract_document_text,
             store_file,
             remove_stored_file,
-            open_stored_file
+            open_stored_file,
+            hash_password,
+            verify_password
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

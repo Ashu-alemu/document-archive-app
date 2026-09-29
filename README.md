@@ -98,6 +98,12 @@ This phase adds document selection, extension and size validation, SHA-256 hashi
 
 Intentionally postponed: authentication, roles and permissions UI, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
 
+## Phase 5 authentication
+
+The application now requires a local account. On first launch, the setup wizard creates an administrator account. Passwords are hashed and verified in the Rust layer with Argon2id-compatible password hashes; plaintext passwords are never written to SQLite. The signed-in session exists only in application memory and is cleared on sign out.
+
+The local roles are Administrator, Manager, Contributor, and Viewer. Administrators can create additional users from Settings. Viewers can search, inspect, and open documents; contributors and managers can add/edit/archive documents; administrators also manage users. Existing document metadata, filesystem storage, OCR, and search migrations remain unchanged.
+
 ## Phase 4 OCR and text search
 
 When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.
