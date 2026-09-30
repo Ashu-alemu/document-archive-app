@@ -2,12 +2,13 @@ use argon2::{password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Sal
 use rand::rngs::OsRng;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::{sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, sync::Mutex, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Manager, State};
 
 #[derive(Default)]
 pub struct SessionState {
     pub active: Mutex<Option<Session>>,
+    pub login_failures: Mutex<HashMap<String, (u32, SystemTime)>>,
 }
 
 pub struct Session {
@@ -63,7 +64,7 @@ pub fn database_connection(app: &AppHandle) -> Result<Connection, String> {
     connection.execute_batch("PRAGMA foreign_keys = ON;").map_err(|error| format!("Unable to configure archive database: {error}"))?;
     // Phase 6 moved application database access into Rust. Ensure the audit
     // schema exists even when the SQL plugin has not opened the database yet.
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);").map_err(|error| format!("Unable to initialize audit schema: {error}"))?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);").map_err(|error| format!("Unable to initialize audit schema: {error}"))?;
     Ok(connection)
 }
 
@@ -102,6 +103,7 @@ pub fn require(actor: &Actor, permission: &str) -> Result<(), String> {
     let allowed = match permission {
         "view" | "open" => matches!(actor.role.as_str(), "admin" | "manager" | "contributor" | "viewer"),
         "create" | "update" => matches!(actor.role.as_str(), "admin" | "manager" | "contributor"),
+        "archive" | "restore" => matches!(actor.role.as_str(), "admin" | "manager"),
         "delete" => matches!(actor.role.as_str(), "admin" | "manager"),
         "admin" | "audit" => actor.role == "admin",
         _ => false,
@@ -115,6 +117,30 @@ fn hash_password(password: &str) -> Result<String, String> {
     Argon2::default().hash_password(password.as_bytes(), &salt).map(|hash| hash.to_string()).map_err(|error| format!("Unable to protect password: {error}"))
 }
 fn verify_password(password: &str, hash: &str) -> bool { PasswordHash::new(hash).map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()).unwrap_or(false) }
+
+fn login_key(username: &str) -> String { username.trim().to_ascii_lowercase() }
+
+fn login_delay(state: &State<'_, SessionState>, username: &str) -> Result<(), String> {
+    let previous = state.login_failures.lock().map_err(|_| "Authentication is unavailable.".to_string())?.get(&login_key(username)).copied();
+    if let Some((count, last)) = previous {
+        let elapsed = last.elapsed().unwrap_or_default();
+        let delay = Duration::from_secs((1_u64 << count.min(3)).saturating_sub(1));
+        if elapsed < delay { std::thread::sleep(delay - elapsed); }
+    }
+    Ok(())
+}
+
+fn record_login_failure(state: &State<'_, SessionState>, username: &str) {
+    if let Ok(mut failures) = state.login_failures.lock() {
+        let key = login_key(username);
+        let count = failures.get(&key).map(|(count, _)| count.saturating_add(1)).unwrap_or(1);
+        failures.insert(key, (count.min(8), SystemTime::now()));
+    }
+}
+
+fn clear_login_failures(state: &State<'_, SessionState>, username: &str) {
+    if let Ok(mut failures) = state.login_failures.lock() { failures.remove(&login_key(username)); }
+}
 
 fn user_response(connection: &Connection, token: String, id: &str) -> Result<SessionUser, String> {
     connection.query_row("SELECT u.id, u.username, u.display_name, r.id, r.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ?", params![id], |row| Ok(SessionUser { token, id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, role: row.get(3)?, role_name: row.get(4)? })).map_err(|error| format!("Unable to load session user: {error}"))
@@ -141,9 +167,11 @@ pub fn setup_admin(app: AppHandle, state: State<'_, SessionState>, username: Str
 #[tauri::command]
 pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
     let connection = database_connection(&app)?;
-    let record = connection.query_row("SELECT u.id, u.password_hash FROM users u WHERE u.username = ? COLLATE NOCASE AND u.active = 1", params![username.trim()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional().map_err(|error| error.to_string())?;
-    let Some((id, hash)) = record else { audit(&connection, None, "login_failed", "authentication", None, Some("Unknown or inactive username"))?; return Err("Invalid username or password.".into()); };
-    if !verify_password(&password, &hash) { audit(&connection, Some(&id), "login_failed", "authentication", Some(&id), Some("Invalid password"))?; return Err("Invalid username or password.".into()); }
+    login_delay(&state, &username)?;
+    let record = connection.query_row("SELECT u.id, u.password_hash FROM users u WHERE u.username = ? COLLATE NOCASE AND u.active = 1", params![username.trim()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional().map_err(|_| "Unable to authenticate.".to_string())?;
+    let Some((id, hash)) = record else { record_login_failure(&state, &username); audit(&connection, None, "login_failure", "authentication", None, Some("invalid_credentials"))?; return Err("Invalid username or password.".into()); };
+    if !verify_password(&password, &hash) { record_login_failure(&state, &username); audit(&connection, None, "login_failure", "authentication", None, Some("invalid_credentials"))?; return Err("Invalid username or password.".into()); }
+    clear_login_failures(&state, &username);
     let timestamp = timestamp(); connection.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", params![timestamp, timestamp, id]).map_err(|error| error.to_string())?;
     audit(&connection, Some(&id), "login_success", "authentication", Some(&id), None)?;
     let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone() });
@@ -160,9 +188,9 @@ pub fn logout(app: AppHandle, state: State<'_, SessionState>, token: String) -> 
 #[tauri::command]
 pub fn list_users(app: AppHandle, state: State<'_, SessionState>, token: String) -> Result<Vec<NativeUser>, String> {
     let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?;
-    let mut statement = connection.prepare("SELECT u.id, u.username, u.display_name, u.active, u.created_at, u.updated_at, u.last_login_at, r.id, r.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id ORDER BY u.username").map_err(|error| error.to_string())?;
-    let rows = statement.query_map([], |row| Ok(NativeUser { id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, active: row.get(3)?, created_at: row.get(4)?, updated_at: row.get(5)?, last_login_at: row.get(6)?, role_id: row.get(7)?, role_name: row.get(8)? })).map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+    let mut statement = connection.prepare("SELECT u.id, u.username, u.display_name, u.active, u.created_at, u.updated_at, u.last_login_at, r.id, r.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id ORDER BY u.username").map_err(|_| "Unable to load users.".to_string())?;
+    let rows = statement.query_map([], |row| Ok(NativeUser { id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, active: row.get(3)?, created_at: row.get(4)?, updated_at: row.get(5)?, last_login_at: row.get(6)?, role_id: row.get(7)?, role_name: row.get(8)? })).map_err(|_| "Unable to load users.".to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|_| "Unable to load users.".to_string())
 }
 
 #[tauri::command]
@@ -178,8 +206,12 @@ pub fn create_user(app: AppHandle, state: State<'_, SessionState>, token: String
 #[tauri::command]
 pub fn update_user(app: AppHandle, state: State<'_, SessionState>, token: String, user_id: String, display_name: String, active: bool) -> Result<(), String> {
     let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?;
-    connection.execute("UPDATE users SET display_name = ?, active = ?, updated_at = ? WHERE id = ?", params![display_name.trim(), if active { 1 } else { 0 }, timestamp(), user_id]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&current.id), "user_updated", "user", Some(&user_id), Some("Profile or active state updated"))
+    if current.id == user_id && !active { return Err("You cannot deactivate the active account.".into()); }
+    let previous: (String, i64) = connection.query_row("SELECT display_name, active FROM users WHERE id = ?", params![user_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| "Unable to update user.".to_string())?;
+    connection.execute("UPDATE users SET display_name = ?, active = ?, updated_at = ? WHERE id = ?", params![display_name.trim(), if active { 1 } else { 0 }, timestamp(), user_id]).map_err(|_| "Unable to update user.".to_string())?;
+    if previous.0 != display_name.trim() { audit(&connection, Some(&current.id), "user_updated", "user", Some(&user_id), Some("display_name_changed"))?; }
+    if previous.1 != if active { 1 } else { 0 } { audit(&connection, Some(&current.id), if active { "user_activated" } else { "user_deactivated" }, "user", Some(&user_id), None)?; }
+    Ok(())
 }
 
 #[tauri::command]
@@ -209,11 +241,11 @@ pub fn change_password(app: AppHandle, state: State<'_, SessionState>, token: St
 }
 
 #[tauri::command]
-pub fn get_audit_logs(app: AppHandle, state: State<'_, SessionState>, token: String, page: u32, page_size: u32, action: String, user_id: String) -> Result<Vec<AuditLog>, String> {
+pub fn get_audit_logs(app: AppHandle, state: State<'_, SessionState>, token: String, page: u32, page_size: u32, action: String, user_id: String, entity_type: String, from: String, to: String) -> Result<Vec<AuditLog>, String> {
     let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "audit")?;
-    let limit = page_size.clamp(1, 100) as i64; let offset = (page as i64).saturating_mul(limit); let action_filter = if action.trim().is_empty() { None } else { Some(action) }; let user_filter = if user_id.trim().is_empty() { None } else { Some(user_id) };
-    let mut statement = connection.prepare("SELECT a.id, a.user_id, u.username, a.action, a.entity_type, a.entity_id, a.details, a.created_at FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id WHERE (? IS NULL OR a.action = ?) AND (? IS NULL OR a.user_id = ?) ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?").map_err(|error| error.to_string())?;
-    let rows = statement.query_map(params![action_filter, action_filter, user_filter, user_filter, limit, offset], |row| Ok(AuditLog { id: row.get(0)?, user_id: row.get(1)?, username: row.get(2)?, action: row.get(3)?, entity_type: row.get(4)?, entity_id: row.get(5)?, details: row.get(6)?, created_at: row.get(7)? })).map_err(|error| error.to_string())?;
+    let limit = page_size.clamp(1, 100) as i64; let offset = (page as i64).saturating_mul(limit); let action_filter = if action.trim().is_empty() { None } else { Some(action) }; let user_filter = if user_id.trim().is_empty() { None } else { Some(user_id) }; let entity_filter = if entity_type.trim().is_empty() { None } else { Some(entity_type) }; let from_filter = if from.trim().is_empty() { None } else { Some(format!("{}T00:00:00Z", from.trim())) }; let to_filter = if to.trim().is_empty() { None } else { Some(format!("{}T23:59:59Z", to.trim())) };
+    let mut statement = connection.prepare("SELECT a.id, a.user_id, u.username, a.action, a.entity_type, a.entity_id, a.details, a.created_at FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id WHERE (? IS NULL OR a.action = ?) AND (? IS NULL OR a.user_id = ?) AND (? IS NULL OR a.entity_type = ?) AND (? IS NULL OR a.created_at >= ?) AND (? IS NULL OR a.created_at <= ?) ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?").map_err(|_| "Unable to load audit logs.".to_string())?;
+    let rows = statement.query_map(params![action_filter, action_filter, user_filter, user_filter, entity_filter, entity_filter, from_filter, from_filter, to_filter, to_filter, limit, offset], |row| Ok(AuditLog { id: row.get(0)?, user_id: row.get(1)?, username: row.get(2)?, action: row.get(3)?, entity_type: row.get(4)?, entity_id: row.get(5)?, details: row.get(6)?, created_at: row.get(7)? })).map_err(|_| "Unable to load audit logs.".to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
 }
 

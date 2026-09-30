@@ -1,7 +1,8 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, State};
-use crate::{security::{actor, audit, require, SessionState}, storage_root};
+use crate::{managed_file_path, security::{actor, audit, require, SessionState}};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DocumentRecord {
@@ -45,21 +46,31 @@ pub fn find_document_by_hash(app: AppHandle, state: State<'_, SessionState>, tok
 pub fn insert_document(app: AppHandle, state: State<'_, SessionState>, token: String, mut record: DocumentRecord) -> Result<(), String> {
     let connection = crate::security::database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "create")?; record.created_by = Some(current.id.clone());
     connection.execute("INSERT INTO documents (id, title, document_type, document_date, reference_number, person_or_organization, department, description, tags, file_name, stored_file_name, file_path, mime_type, file_size, file_hash, ocr_text, ocr_status, created_by, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![record.id, record.title, record.document_type, record.document_date, record.reference_number, record.person_or_organization, record.department, record.description, record.tags, record.file_name, record.stored_file_name, record.file_path, record.mime_type, record.file_size, record.file_hash, record.ocr_text, record.ocr_status, record.created_by, record.created_at, record.updated_at, record.status]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&current.id), "document_created", "document", Some(&record.id), Some(&record.title))
+    let details = serde_json::to_string(&json!({"title": record.title})).map_err(|_| "Unable to record document audit.".to_string())?;
+    audit(&connection, Some(&current.id), "document_created", "document", Some(&record.id), Some(&details))
 }
 
 #[tauri::command]
 pub fn update_document(app: AppHandle, state: State<'_, SessionState>, token: String, id: String, values: DocumentValues) -> Result<(), String> {
     let connection = crate::security::database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "update")?;
+    let previous: (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String) = connection.query_row("SELECT title, document_type, document_date, reference_number, person_or_organization, department, description, tags, status FROM documents WHERE id = ?", params![id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?))).map_err(|_| "Unable to find document.".to_string())?;
+    if previous.8 != values.status { if values.status == "archived" { require(&current, "archive")?; } else if values.status == "active" { require(&current, "restore")?; } else { return Err("Invalid document status.".into()); } }
     connection.execute("UPDATE documents SET title = ?, document_type = ?, document_date = ?, reference_number = ?, person_or_organization = ?, department = ?, description = ?, tags = ?, status = ?, updated_at = ? WHERE id = ?", params![values.title, values.document_type, values.document_date, values.reference_number, values.person_or_organization, values.department, values.description, values.tags, values.status, crate::security::timestamp(), id]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&current.id), "document_updated", "document", Some(&id), Some("Metadata updated"))
+    if previous.8 != values.status { return audit(&connection, Some(&current.id), if values.status == "archived" { "document_archived" } else { "document_restored" }, "document", Some(&id), None); }
+    let fields = [
+        ("title", previous.0 != values.title), ("document_type", previous.1 != values.document_type), ("document_date", previous.2 != values.document_date),
+        ("reference_number", previous.3 != values.reference_number), ("person_or_organization", previous.4 != values.person_or_organization),
+        ("department", previous.5 != values.department), ("description", previous.6 != values.description), ("tags", previous.7 != values.tags),
+    ].into_iter().filter_map(|(field, changed)| changed.then_some(field)).collect::<Vec<_>>();
+    let details = serde_json::to_string(&json!({"changed_fields": fields})).map_err(|_| "Unable to record document audit.".to_string())?;
+    audit(&connection, Some(&current.id), "document_updated", "document", Some(&id), Some(&details))
 }
 
 #[tauri::command]
 pub fn delete_document(app: AppHandle, state: State<'_, SessionState>, token: String, id: String) -> Result<(), String> {
     let connection = crate::security::database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "delete")?;
     let path: String = connection.query_row("SELECT file_path FROM documents WHERE id = ?", params![id], |row| row.get(0)).map_err(|error| format!("Unable to find document: {error}"))?;
-    let root = storage_root(&app)?; let managed = std::path::PathBuf::from(&path); if !managed.starts_with(&root) { return Err("Refusing to delete a file outside managed storage.".into()); }
+    let managed = managed_file_path(&app, &path)?;
     if managed.exists() { std::fs::remove_file(&managed).map_err(|error| format!("Unable to delete archived file: {error}"))?; }
     connection.execute("DELETE FROM documents WHERE id = ?", params![id]).map_err(|error| error.to_string())?;
     audit(&connection, Some(&current.id), "document_deleted", "document", Some(&id), None)
@@ -69,7 +80,7 @@ pub fn delete_document(app: AppHandle, state: State<'_, SessionState>, token: St
 pub fn open_document(app: AppHandle, state: State<'_, SessionState>, token: String, id: String) -> Result<(), String> {
     let connection = crate::security::database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "open")?;
     let path: String = connection.query_row("SELECT file_path FROM documents WHERE id = ?", params![id], |row| row.get(0)).map_err(|error| format!("Unable to find document: {error}"))?;
-    let root = storage_root(&app)?; let path = std::path::PathBuf::from(path); if !path.starts_with(&root) || !path.is_file() { return Err("The archived file no longer exists.".into()); }
+    let path = managed_file_path(&app, &path)?;
     tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|error| format!("Unable to open archived file: {error}"))?;
     audit(&connection, Some(&current.id), "document_opened", "document", Some(&id), None)
 }

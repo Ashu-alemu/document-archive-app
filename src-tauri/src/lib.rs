@@ -261,6 +261,13 @@ pub(crate) fn storage_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
+pub(crate) fn managed_file_path(app: &AppHandle, value: &str) -> Result<PathBuf, String> {
+    let root = storage_root(app)?.canonicalize().map_err(|_| "Managed storage is unavailable.".to_string())?;
+    let path = PathBuf::from(value).canonicalize().map_err(|_| "The managed file does not exist.".to_string())?;
+    if !path.starts_with(&root) || !path.is_file() { return Err("The requested file is outside managed storage.".into()); }
+    Ok(path)
+}
+
 fn ensure_directories(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data = app.path().app_config_dir()?;
     fs::create_dir_all(app_data.join("database"))?;
@@ -298,7 +305,8 @@ fn extract_document_text(app: AppHandle, state: State<'_, SessionState>, token: 
     let connection = security::database_connection(&app)?;
     let current = actor(&connection, &state, &token)?;
     require(&current, "view")?;
-    extract_text(Path::new(&source_path))
+    let path = managed_file_path(&app, &source_path)?;
+    extract_text(&path)
 }
 
 #[tauri::command]
@@ -356,11 +364,7 @@ fn remove_stored_file(app: AppHandle, state: State<'_, SessionState>, token: Str
     let connection = security::database_connection(&app)?;
     let current = actor(&connection, &state, &token)?;
     require(&current, "create")?;
-    let root = storage_root(&app)?;
-    let path = PathBuf::from(&file_path);
-    if !path.starts_with(&root) {
-        return Err("Refusing to remove a file outside managed storage.".into());
-    }
+    let path = managed_file_path(&app, &file_path)?;
     if path.exists() {
         fs::remove_file(path)
             .map_err(|error| format!("Unable to clean up copied file: {error}"))?;
@@ -399,6 +403,12 @@ pub fn run() {
             version: 5,
             description: "add_audit_logs",
             sql: include_str!("../migrations/0005_add_audit_logs.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "harden_audit_indexes",
+            sql: include_str!("../migrations/0006_harden_audit_indexes.sql"),
             kind: MigrationKind::Up,
         },
     ];
