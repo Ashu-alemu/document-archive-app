@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod document_commands;
+mod organization_commands;
 mod backup_commands;
 mod security;
 use security::{actor, require, SessionState};
@@ -418,6 +419,12 @@ pub fn run() {
             sql: include_str!("../migrations/0007_add_backup_history.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "advanced_archive",
+            sql: include_str!("../migrations/0008_advanced_archive.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -458,12 +465,22 @@ pub fn run() {
             backup_commands::verify_backup,
             backup_commands::restore_backup,
             document_commands::find_documents,
+            document_commands::find_recent_documents,
             document_commands::find_document_by_id,
             document_commands::find_document_by_hash,
             document_commands::insert_document,
             document_commands::update_document,
             document_commands::delete_document,
             document_commands::open_document,
+            document_commands::set_document_favorite,
+            organization_commands::list_categories,
+            organization_commands::create_category,
+            organization_commands::rename_category,
+            organization_commands::delete_category,
+            organization_commands::list_tags,
+            organization_commands::create_tag,
+            organization_commands::rename_tag,
+            organization_commands::delete_tag,
             inspect_file,
             extract_document_text,
             store_file,

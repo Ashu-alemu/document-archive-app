@@ -3,7 +3,7 @@ export const DOCUMENT_TYPES = [
   'Contract / Agreement', 'Payment Document', 'Photo / Scan', 'Other',
 ] as const
 
-export type DocumentType = (typeof DOCUMENT_TYPES)[number]
+export type DocumentType = string
 export type DocumentStatus = 'active' | 'archived'
 export type OcrStatus = 'completed' | 'skipped' | 'failed'
 
@@ -29,6 +29,29 @@ export interface DocumentRecord {
   created_at: string
   updated_at: string
   status: DocumentStatus
+  is_favorite: boolean
+}
+
+export interface DocumentSearchFilters {
+  search: string
+  searchMode: 'all' | 'any'
+  type: string
+  from: string
+  to: string
+  organization: string
+  tag: string
+  favoritesOnly: boolean
+  sortBy: 'date' | 'created' | 'updated' | 'title' | 'category' | 'size'
+  sortDirection: 'asc' | 'desc'
+}
+
+export interface DocumentSearchResults {
+  documents: DocumentRecord[]
+  total: number
+}
+
+export interface ManagedValue {
+  name: string
 }
 
 export interface DocumentFormValues {
