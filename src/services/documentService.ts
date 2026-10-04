@@ -38,7 +38,7 @@ export async function saveDocument(token: string, values: DocumentFormValues, fi
     department: values.department.trim() || null, description: values.description.trim() || null, tags: values.tags.trim() || null,
     file_name: file.fileName, stored_file_name: stored.stored_file_name, file_path: stored.file_path,
     mime_type: stored.mime_type, file_size: stored.file_size, file_hash: stored.file_hash, ocr_text: extracted.text, ocr_status: extracted.status, created_by: null,
-    created_at: now, updated_at: now, status: 'active',
+    created_at: now, updated_at: now, status: 'active', is_favorite: false,
   }
   try { await insertDocument(token, record) } catch (error) {
     await invoke('remove_stored_file', { token, filePath: stored.file_path }).catch(() => undefined)

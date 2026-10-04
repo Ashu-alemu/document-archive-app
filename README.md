@@ -139,6 +139,14 @@ Phase 8 is implemented in the working tree and is awaiting final testing and com
 
 Restore validates the ZIP structure, rejects unsafe paths, verifies every manifest hash, stages the contents, preserves the current database and storage while installing the restored pair, and rolls back the filesystem swap when installation fails. Restore and verification are administrator-only Tauri commands. Backup history is stored in the `backup_history` table and is bounded to the newest 100 records in the UI. The backup archive itself is portable and can be copied to another compatible application-data backup location; it contains no plaintext export of passwords beyond the database’s existing Argon2 hashes.
 
+### Advanced archive & search
+
+The archive search builder combines metadata/OCR keyword search (matching all terms or any term) with category, tag, organization, document-date range, and favorites filters. Results can be sorted by document date, creation date, last update, title, category, or file size. Search input is debounced and result pages are capped at 50 records per request.
+
+Administrators can create, rename, and delete categories and tags from Categories & tags. Renaming a category also updates existing document records; a category still used by a document cannot be deleted. Tag rename and deletion update existing document metadata. Existing document types and comma-separated tags are retained and migrated into the managed catalogs.
+
+Favorites and recent opens are stored per local user. The dashboard shows recently opened documents, and Favorites provides a dedicated filtered view. Migration `0008_advanced_archive.sql` adds the catalogs, per-user activity tables, and browse indexes while preserving the existing document schema.
+
 ## Git and private data
 
 The repository contains source code and configuration only. Database files, uploaded documents, storage folders, thumbnails, backups, logs, build output, temporary files, and secrets are ignored by `.gitignore`.
