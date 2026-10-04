@@ -2,6 +2,10 @@
 
 Document Archive is a modern, offline-first desktop foundation for storing and searching organizational records such as letters, receipts, invoices, meeting documents, reports, certificates, contracts, scanned images, and PDFs.
 
+## Phase 1 — Project foundation
+
+The project foundation is complete, including the Tauri desktop shell, React frontend, Rust native layer, and development tooling.
+
 ## Technology stack
 
 - Tauri 2 desktop runtime
@@ -64,7 +68,9 @@ src/
 src-tauri/             # Rust/Tauri configuration and native entrypoint
 ```
 
-## Storage architecture
+## Phase 2 — Database & document storage
+
+### Storage architecture
 
 Actual PDF, image, and other document files will live in the filesystem. SQLite will store metadata and paths; document binaries will not be stored inside SQLite.
 
@@ -88,25 +94,29 @@ The SQL connection module uses `sqlite:database/documents.db`. The Tauri SQL plu
 
 At startup, the Rust layer creates the database, storage category, thumbnails, backups, and logs directories. Documents are copied into `storage/<category>/<year>/<month>/` using a generated managed filename. A temporary copy is finalized before its metadata is inserted into SQLite.
 
-## Database architecture
+### Database architecture
 
 SQLite stores document metadata, including title, date, type, reference number, organization, department, description, tags, original/stored filenames, path, MIME type, size, SHA-256 hash, timestamps, and active/archived status. Migration `src-tauri/migrations/0001_create_documents.sql` creates the `documents` table and indexes for status, type, date, and file hash. Document binaries are never stored in SQLite.
 
-## Phase 3 scope
+## Phase 3 — Document management & search
 
 This phase adds document selection, extension and size validation, SHA-256 hashing, duplicate detection, managed filesystem storage, metadata insertion, document listing, parameterized search/filtering, details, metadata editing, OS-default file opening, and archive status without permanent deletion.
 
-Intentionally postponed: authentication, roles and permissions UI, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.
+Intentionally postponed: deletion, version history, AI features, cloud synchronization, and mobile applications.
 
-## Phase 5 authentication
+## Phase 4 — OCR & document opening
+
+When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.
+
+## Phase 5 — Authentication & roles
 
 The application now requires a local account. On first launch, the setup wizard creates an administrator account. Passwords are hashed and verified in the Rust layer with Argon2id-compatible password hashes; plaintext passwords are never written to SQLite. The signed-in session exists only in application memory and is cleared on sign out.
 
 The local roles are Administrator, Manager, Contributor, and Viewer. Administrators can create additional users from Settings. Viewers can search, inspect, and open documents; contributors and managers can add/edit/archive documents; administrators also manage users. Existing document metadata, filesystem storage, OCR, and search migrations remain unchanged.
 
-## Phase 6 security, authorization, and audit logging
+## Phase 6 — Security, authorization & audit logging
 
-Phase 6 makes Rust/Tauri the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.
+Rust/Tauri is the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.
 
 | Role | Documents | Users | Audit logs |
 | --- | --- | --- | --- |
@@ -115,13 +125,19 @@ Phase 6 makes Rust/Tauri the authority for authentication and authorization. The
 | Contributor | Create, edit, view, search, open | None | None |
 | Viewer | View, search, open | None | None |
 
-Migration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create `login_success`, `login_failed`, `logout`, `document_created`, `document_updated`, `document_deleted`, `document_opened`, `user_created`, `user_updated`, `user_deleted`, `user_role_changed`, and `password_changed` events. Passwords and authentication secrets are never included in audit details.
+Migration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create authentication, document, user, and password audit events. Passwords and authentication secrets are never included in audit details.
 
 Administrators have an Audit logs screen with action filtering, loading/error/empty states, and 25-record pagination. To test manually, create users for each role, sign in separately, attempt both allowed and forbidden document/user/audit actions, and confirm forbidden requests return backend authorization errors even when invoked outside the visible controls. Run `pnpm lint`, `pnpm build`, and `cargo test`/`cargo check` before packaging.
 
-## Phase 4 OCR and text search
+## Phase 7 — Document organization & advanced search
 
-When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.
+This phase is partially implemented. Existing functionality includes document categories/types, tags, full-text search across metadata and OCR text, type filtering, date-range filtering, and newest-first sorting. A dedicated advanced-search screen, user-selectable sorting, a rich multi-criteria search builder, and a separate category-management system are not currently implemented.
+
+## Phase 8 — Backup & Restore
+
+Phase 8 is implemented in the working tree and is awaiting final testing and commit. Administrators can create, verify, list, and restore local backups from the Backup & restore screen. A backup is a portable ZIP archive stored under the application-data `backups/` directory. It contains a SQLite snapshot at `database/documents.db`, every managed document under `storage/`, and a `manifest.json` with SHA-256 hashes and sizes for each included file. Backup creation verifies the archive before marking it verified.
+
+Restore validates the ZIP structure, rejects unsafe paths, verifies every manifest hash, stages the contents, preserves the current database and storage while installing the restored pair, and rolls back the filesystem swap when installation fails. Restore and verification are administrator-only Tauri commands. Backup history is stored in the `backup_history` table and is bounded to the newest 100 records in the UI. The backup archive itself is portable and can be copied to another compatible application-data backup location; it contains no plaintext export of passwords beyond the database’s existing Argon2 hashes.
 
 ## Git and private data
 

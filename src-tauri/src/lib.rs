@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod document_commands;
+mod backup_commands;
 mod security;
 use security::{actor, require, SessionState};
 
@@ -411,6 +412,12 @@ pub fn run() {
             sql: include_str!("../migrations/0006_harden_audit_indexes.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "add_backup_history",
+            sql: include_str!("../migrations/0007_add_backup_history.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -446,6 +453,10 @@ pub fn run() {
             security::delete_user,
             security::change_password,
             security::get_audit_logs,
+            backup_commands::create_backup,
+            backup_commands::list_backups,
+            backup_commands::verify_backup,
+            backup_commands::restore_backup,
             document_commands::find_documents,
             document_commands::find_document_by_id,
             document_commands::find_document_by_hash,

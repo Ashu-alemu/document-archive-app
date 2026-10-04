@@ -1,0 +1,281 @@
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 4085c48..f549026 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -2,6 +2,10 @@[m
+ [m
+ Document Archive is a modern, offline-first desktop foundation for storing and searching organizational records such as letters, receipts, invoices, meeting documents, reports, certificates, contracts, scanned images, and PDFs.[m
+ [m
+[32m+[m[32m## Phase 1 — Project foundation[m
+[32m+[m
+[32m+[m[32mThe project foundation is complete, including the Tauri desktop shell, React frontend, Rust native layer, and development tooling.[m
+[32m+[m
+ ## Technology stack[m
+ [m
+ - Tauri 2 desktop runtime[m
+[36m@@ -64,7 +68,9 @@[m [msrc/[m
+ src-tauri/             # Rust/Tauri configuration and native entrypoint[m
+ ```[m
+ [m
+[31m-## Storage architecture[m
+[32m+[m[32m## Phase 2 — Database & document storage[m
+[32m+[m
+[32m+[m[32m### Storage architecture[m
+ [m
+ Actual PDF, image, and other document files will live in the filesystem. SQLite will store metadata and paths; document binaries will not be stored inside SQLite.[m
+ [m
+[36m@@ -88,25 +94,29 @@[m [mThe SQL connection module uses `sqlite:database/documents.db`. The Tauri SQL plu[m
+ [m
+ At startup, the Rust layer creates the database, storage category, thumbnails, backups, and logs directories. Documents are copied into `storage/<category>/<year>/<month>/` using a generated managed filename. A temporary copy is finalized before its metadata is inserted into SQLite.[m
+ [m
+[31m-## Database architecture[m
+[32m+[m[32m### Database architecture[m
+ [m
+ SQLite stores document metadata, including title, date, type, reference number, organization, department, description, tags, original/stored filenames, path, MIME type, size, SHA-256 hash, timestamps, and active/archived status. Migration `src-tauri/migrations/0001_create_documents.sql` creates the `documents` table and indexes for status, type, date, and file hash. Document binaries are never stored in SQLite.[m
+ [m
+[31m-## Phase 3 scope[m
+[32m+[m[32m## Phase 3 — Document management & search[m
+ [m
+ This phase adds document selection, extension and size validation, SHA-256 hashing, duplicate detection, managed filesystem storage, metadata insertion, document listing, parameterized search/filtering, details, metadata editing, OS-default file opening, and archive status without permanent deletion.[m
+ [m
+[31m-Intentionally postponed: authentication, roles and permissions UI, backups, deletion, version history, AI features, cloud synchronization, and mobile applications.[m
+[32m+[m[32mIntentionally postponed: deletion, version history, AI features, cloud synchronization, and mobile applications.[m
+[32m+[m
+[32m+[m[32m## Phase 4 — OCR & document opening[m
+[32m+[m
+[32m+[m[32mWhen a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.[m
+ [m
+[31m-## Phase 5 authentication[m
+[32m+[m[32m## Phase 5 — Authentication & roles[m
+ [m
+ The application now requires a local account. On first launch, the setup wizard creates an administrator account. Passwords are hashed and verified in the Rust layer with Argon2id-compatible password hashes; plaintext passwords are never written to SQLite. The signed-in session exists only in application memory and is cleared on sign out.[m
+ [m
+ The local roles are Administrator, Manager, Contributor, and Viewer. Administrators can create additional users from Settings. Viewers can search, inspect, and open documents; contributors and managers can add/edit/archive documents; administrators also manage users. Existing document metadata, filesystem storage, OCR, and search migrations remain unchanged.[m
+ [m
+[31m-## Phase 6 security, authorization, and audit logging[m
+[32m+[m[32m## Phase 6 — Security, authorization & audit logging[m
+ [m
+[31m-Phase 6 makes Rust/Tauri the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.[m
+[32m+[m[32mRust/Tauri is the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.[m
+ [m
+ | Role | Documents | Users | Audit logs |[m
+ | --- | --- | --- | --- |[m
+[36m@@ -115,13 +125,19 @@[m [mPhase 6 makes Rust/Tauri the authority for authentication and authorization. The[m
+ | Contributor | Create, edit, view, search, open | None | None |[m
+ | Viewer | View, search, open | None | None |[m
+ [m
+[31m-Migration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create `login_success`, `login_failed`, `logout`, `document_created`, `document_updated`, `document_deleted`, `document_opened`, `user_created`, `user_updated`, `user_deleted`, `user_role_changed`, and `password_changed` events. Passwords and authentication secrets are never included in audit details.[m
+[32m+[m[32mMigration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create authentication, document, user, and password audit events. Passwords and authentication secrets are never included in audit details.[m
+ [m
+ Administrators have an Audit logs screen with action filtering, loading/error/empty states, and 25-record pagination. To test manually, create users for each role, sign in separately, attempt both allowed and forbidden document/user/audit actions, and confirm forbidden requests return backend authorization errors even when invoked outside the visible controls. Run `pnpm lint`, `pnpm build`, and `cargo test`/`cargo check` before packaging.[m
+ [m
+[31m-## Phase 4 OCR and text search[m
+[32m+[m[32m## Phase 7 — Document organization & advanced search[m
+ [m
+[31m-When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.[m
+[32m+[m[32mThis phase is partially implemented. Existing functionality includes document categories/types, tags, full-text search across metadata and OCR text, type filtering, date-range filtering, and newest-first sorting. A dedicated advanced-search screen, user-selectable sorting, a rich multi-criteria search builder, and a separate category-management system are not currently implemented.[m
+[32m+[m
+[32m+[m[32m## Phase 8 — Backup & Restore[m
+[32m+[m
+[32m+[m[32mPhase 8 is implemented in the working tree and is awaiting final testing and commit. Administrators can create, verify, list, and restore local backups from the Backup & restore screen. A backup is a portable ZIP archive stored under the application-data `backups/` directory. It contains a SQLite snapshot at `database/documents.db`, every managed document under `storage/`, and a `manifest.json` with SHA-256 hashes and sizes for each included file. Backup creation verifies the archive before marking it verified.[m
+[32m+[m
+[32m+[m[32mRestore validates the ZIP structure, rejects unsafe paths, verifies every manifest hash, stages the contents, preserves the current database and storage while installing the restored pair, and rolls back the filesystem swap when installation fails. Restore and verification are administrator-only Tauri commands. Backup history is stored in the `backup_history` table and is bounded to the newest 100 records in the UI. The backup archive itself is portable and can be copied to another compatible application-data backup location; it contains no plaintext export of passwords beyond the database’s existing Argon2 hashes.[m
+ [m
+ ## Git and private data[m
+ [m
+[1mdiff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock[m
+[1mindex 4c61320..6a0c359 100644[m
+[1m--- a/src-tauri/Cargo.lock[m
+[1m+++ b/src-tauri/Cargo.lock[m
+[36m@@ -82,6 +82,15 @@[m [mversion = "1.0.104"[m
+ source = "registry+https://github.com/rust-lang/crates.io-index"[m
+ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"[m
+ [m
+[32m+[m[32m[[package]][m
+[32m+[m[32mname = "arbitrary"[m
+[32m+[m[32mversion = "1.4.2"[m
+[32m+[m[32msource = "registry+https://github.com/rust-lang/crates.io-index"[m
+[32m+[m[32mchecksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"[m
+[32m+[m[32mdependencies = [[m
+[32m+[m[32m "derive_arbitrary",[m
+[32m+[m[32m][m
+[32m+[m
+ [[package]][m
+ name = "argon2"[m
+ version = "0.5.3"[m
+[36m@@ -855,6 +864,17 @@[m [mdependencies = [[m
+  "serde_core",[m
+ ][m
+ [m
+[32m+[m[32m[[package]][m
+[32m+[m[32mname = "derive_arbitrary"[m
+[32m+[m[32mversion = "1.4.2"[m
+[32m+[m[32msource = "registry+https://github.com/rust-lang/crates.io-index"[m
+[32m+[m[32mchecksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"[m
+[32m+[m[32mdependencies = [[m
+[32m+[m[32m "proc-macro2",[m
+[32m+[m[32m "quote",[m
+[32m+[m[32m "syn 2.0.119",[m
+[32m+[m[32m][m
+[32m+[m
+ [[package]][m
+ name = "derive_more"[m
+ version = "2.1.1"[m
+[36m@@ -974,6 +994,7 @@[m [mdependencies = [[m
+  "tauri-plugin-opener",[m
+  "tauri-plugin-sql",[m
+  "uuid",[m
+[32m+[m[32m "zip",[m
+ ][m
+ [m
+ [[package]][m
+[36m@@ -6150,6 +6171,23 @@[m [mdependencies = [[m
+  "syn 3.0.6",[m
+ ][m
+ [m
+[32m+[m[32m[[package]][m
+[32m+[m[32mname = "zip"[m
+[32m+[m[32mversion = "2.4.2"[m
+[32m+[m[32msource = "registry+https://github.com/rust-lang/crates.io-index"[m
+[32m+[m[32mchecksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"[m
+[32m+[m[32mdependencies = [[m
+[32m+[m[32m "arbitrary",[m
+[32m+[m[32m "crc32fast",[m
+[32m+[m[32m "crossbeam-utils",[m
+[32m+[m[32m "displaydoc",[m
+[32m+[m[32m "flate2",[m
+[32m+[m[32m "indexmap 2.14.2",[m
+[32m+[m[32m "memchr",[m
+[32m+[m[32m "thiserror 2.0.21",[m
+[32m+[m[32m "zopfli",[m
+[32m+[m[32m][m
+[32m+[m
+ [[package]][m
+ name = "zlib-rs"[m
+ version = "0.6.8"[m
+[36m@@ -6162,6 +6200,18 @@[m [mversion = "1.0.23"[m
+ source = "registry+https://github.com/rust-lang/crates.io-index"[m
+ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"[m
+ [m
+[32m+[m[32m[[package]][m
+[32m+[m[32mname = "zopfli"[m
+[32m+[m[32mversion = "0.8.3"[m
+[32m+[m[32msource = "registry+https://github.com/rust-lang/crates.io-index"[m
+[32m+[m[32mchecksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"[m
+[32m+[m[32mdependencies = [[m
+[32m+[m[32m "bumpalo",[m
+[32m+[m[32m "crc32fast",[m
+[32m+[m[32m "log",[m
+[32m+[m[32m "simd-adler32",[m
+[32m+[m[32m][m
+[32m+[m
+ [[package]][m
+ name = "zvariant"[m
+ version = "5.15.0"[m
+[1mdiff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml[m
+[1mindex 679ef91..811e5b5 100644[m
+[1m--- a/src-tauri/Cargo.toml[m
+[1m+++ b/src-tauri/Cargo.toml[m
+[36m@@ -32,3 +32,4 @@[m [margon2 = "0.5"[m
+ rand = "0.8"[m
+ rusqlite = { version = "0.32", features = ["bundled"] }[m
+ uuid = { version = "1", features = ["v4"] }[m
+[32m+[m[32mzip = { version = "2.2", default-features = false, features = ["deflate"] }[m
+[1mdiff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs[m
+[1mindex e9aa3fe..c172435 100644[m
+[1m--- a/src-tauri/src/lib.rs[m
+[1m+++ b/src-tauri/src/lib.rs[m
+[36m@@ -11,6 +11,7 @@[m [muse tauri::{AppHandle, Manager, State};[m
+ use tauri_plugin_sql::{Migration, MigrationKind};[m
+ [m
+ mod document_commands;[m
+[32m+[m[32mmod backup_commands;[m
+ mod security;[m
+ use security::{actor, require, SessionState};[m
+ [m
+[36m@@ -411,6 +412,12 @@[m [mpub fn run() {[m
+             sql: include_str!("../migrations/0006_harden_audit_indexes.sql"),[m
+             kind: MigrationKind::Up,[m
+         },[m
+[32m+[m[32m        Migration {[m
+[32m+[m[32m            version: 7,[m
+[32m+[m[32m            description: "add_backup_history",[m
+[32m+[m[32m            sql: include_str!("../migrations/0007_add_backup_history.sql"),[m
+[32m+[m[32m            kind: MigrationKind::Up,[m
+[32m+[m[32m        },[m
+     ];[m
+     tauri::Builder::default()[m
+         .manage(SessionState::default())[m
+[36m@@ -446,6 +453,10 @@[m [mpub fn run() {[m
+             security::delete_user,[m
+             security::change_password,[m
+             security::get_audit_logs,[m
+[32m+[m[32m            backup_commands::create_backup,[m
+[32m+[m[32m            backup_commands::list_backups,[m
+[32m+[m[32m            backup_commands::verify_backup,[m
+[32m+[m[32m            backup_commands::restore_backup,[m
+             document_commands::find_documents,[m
+             document_commands::find_document_by_id,[m
+             document_commands::find_document_by_hash,[m
+[1mdiff --git a/src-tauri/src/security.rs b/src-tauri/src/security.rs[m
+[1mindex a6656a7..e135c00 100644[m
+[1m--- a/src-tauri/src/security.rs[m
+[1m+++ b/src-tauri/src/security.rs[m
+[36m@@ -59,15 +59,19 @@[m [mpub struct AuditLog {[m
+ }[m
+ [m
+ pub fn database_connection(app: &AppHandle) -> Result<Connection, String> {[m
+[31m-    let path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("database").join("documents.db");[m
+[32m+[m[32m    let path = database_path(app)?;[m
+     let connection = Connection::open(path).map_err(|error| format!("Unable to open archive database: {error}"))?;[m
+     connection.execute_batch("PRAGMA foreign_keys = ON;").map_err(|error| format!("Unable to configure archive database: {error}"))?;[m
+     // Phase 6 moved application database access into Rust. Ensure the audit[m
+     // schema exists even when the SQL plugin has not opened the database yet.[m
+[31m-    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);").map_err(|error| format!("Unable to initialize audit schema: {error}"))?;[m
+[32m+[m[32m    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id); CREATE TABLE IF NOT EXISTS backup_history (id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, completed_at TEXT, verified_at TEXT, file_size INTEGER NOT NULL DEFAULT 0, file_hash TEXT, status TEXT NOT NULL, error_message TEXT); CREATE INDEX IF NOT EXISTS idx_backup_history_created_at ON backup_history(created_at DESC); CREATE INDEX IF NOT EXISTS idx_backup_history_status ON backup_history(status);").map_err(|error| format!("Unable to initialize audit and backup schemas: {error}"))?;[m
+     Ok(connection)[m
+ }[m
+ [m
+[32m+[m[32mpub fn database_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {[m
+[32m+[m[32m    app.path().app_config_dir().map(|path| path.join("database").join("documents.db")).map_err(|error| error.to_string())[m
+[32m+[m[32m}[m
+[32m+[m
+ pub fn timestamp() -> String { chrono_like_now() }[m
+ fn chrono_like_now() -> String {[m
+     // Keep timestamps in the same UTC ISO-8601 shape as the existing frontend.[m
+[1mdiff --git a/src/App.tsx b/src/App.tsx[m
+[1mindex 38ce7e6..aa20bfd 100644[m
+[1m--- a/src/App.tsx[m
+[1m+++ b/src/App.tsx[m
+[36m@@ -9,10 +9,11 @@[m [mimport type { DocumentFormValues, DocumentRecord, SelectedFile } from './types/d[m
+ import './App.css'[m
+ import { LoginScreen, SetupScreen, UserManagement } from './components/AuthScreens'[m
+ import { AuditLog } from './components/AuditLog'[m
+[32m+[m[32mimport { BackupScreen } from './components/BackupScreen'[m
+ import { hasUsers, logout } from './services/authService'[m
+ import type { SessionUser } from './types/auth'[m
+ [m
+[31m-type View = 'dashboard' | 'documents' | 'add' | 'archived' | 'settings' | 'audit' | 'details' | 'edit'[m
+[32m+[m[32mtype View = 'dashboard' | 'documents' | 'add' | 'archived' | 'settings' | 'audit' | 'backup' | 'details' | 'edit'[m
+ const isDesktop = () => '__TAURI_INTERNALS__' in window[m
+ [m
+ function App() {[m
+[36m@@ -49,15 +50,16 @@[m [mfunction App() {[m
+   const open = async (document: DocumentRecord) => { try { await openDocumentFile(user.token, document) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to open this file.') } }[m
+   const archive = async () => { if (!selected) return; await archiveDocumentRecord(user.token, selected); setNotice('Document archived. The original file was kept.'); go('archived') }[m
+   const remove = async () => { if (!selected || !window.confirm('Delete this document and its stored file permanently?')) return; await deleteDocumentRecord(user.token, selected.id); setNotice('Document deleted.'); go('documents') }[m
+[31m-  const heading = view === 'dashboard' ? 'Good morning' : view === 'add' ? 'Add document' : view === 'archived' ? 'Archived documents' : view === 'settings' ? 'Settings' : view === 'audit' ? 'Audit logs' : 'Documents'[m
+[32m+[m[32m  const heading = view === 'dashboard' ? 'Good morning' : view === 'add' ? 'Add document' : view === 'archived' ? 'Archived documents' : view === 'settings' ? 'Settings' : view === 'audit' ? 'Audit logs' : view === 'backup' ? 'Backup & restore' : 'Documents'[m
+ [m
+[31m-  return <div className="app-shell"><aside className="sidebar"><div className="brand-mark">DA</div><div className="brand-copy"><span className="eyebrow">Workspace</span><strong>Document Archive</strong></div><nav aria-label="Primary navigation"><button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} onClick={() => go('dashboard')}><span>⌂</span>Dashboard</button><button className={`nav-item ${view === 'documents' || view === 'details' || view === 'edit' ? 'active' : ''}`} onClick={() => go('documents')}><span>▤</span>Documents</button>{canAdd && <button className={`nav-item ${view === 'add' ? 'active' : ''}`} onClick={() => go('add')}><span>＋</span>Add document</button>}<button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>{canManageUsers && <><button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Users</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button></>}</nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setAuthState('login'); setView('dashboard') }}>Sign out</button></div></aside>[m
+[32m+[m[32m  return <div className="app-shell"><aside className="sidebar"><div className="brand-mark">DA</div><div className="brand-copy"><span className="eyebrow">Workspace</span><strong>Document Archive</strong></div><nav aria-label="Primary navigation"><button className={`nav-item ${view === 'dashboard' ? 'active' : ''}`} onClick={() => go('dashboard')}><span>⌂</span>Dashboard</button><button className={`nav-item ${view === 'documents' || view === 'details' || view === 'edit' ? 'active' : ''}`} onClick={() => go('documents')}><span>▤</span>Documents</button>{canAdd && <button className={`nav-item ${view === 'add' ? 'active' : ''}`} onClick={() => go('add')}><span>＋</span>Add document</button>}<button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>{canManageUsers && <><button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Users</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}</nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setAuthState('login'); setView('dashboard') }}>Sign out</button></div></aside>[m
+     <main className="main-content"><header className="topbar"><div><span className="eyebrow">Your records, organized</span><h1>{heading}</h1></div>{canAdd && view !== 'add' && view !== 'settings' && view !== 'audit' && view !== 'edit' && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}[m
+       {view === 'add' && <DocumentForm onCancel={() => go('documents')} onSave={saveNew} />}[m
+       {view === 'edit' && selected && <DocumentForm initial={selected} onCancel={() => setView('details')} onSave={saveEdit} />}[m
+       {view === 'details' && selected && <DocumentDetails document={selected} onBack={() => go('documents')} onOpen={() => void open(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}[m
+       {view === 'settings' && canManageUsers && <UserManagement token={user.token} />}[m
+       {view === 'audit' && canManageUsers && <AuditLog token={user.token} />}[m
+[32m+[m[32m      {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setAuthState('login'); setView('dashboard') }} />}[m
+       {view === 'dashboard' && <><section className="welcome-card"><div><span className="card-kicker">Offline-first archive</span><h2>A calmer home for important documents.</h2><p>Your records stay on this computer, with metadata in SQLite and actual files in managed storage.</p></div><div className="welcome-icon" aria-hidden="true">✦</div></section><section className="stats-grid"><article className="stat-card"><span className="stat-label">Active documents</span><strong>{documents.length}</strong><span className="muted">Matching your current archive</span></article><article className="stat-card"><span className="stat-label">Storage</span><strong>Local</strong><span className="muted">Files remain on this device</span></article><article className="stat-card"><span className="stat-label">Phase 3</span><strong>Ready</strong><span className="muted">Search, filter, and open records</span></article></section><section className="recent-section"><div className="section-heading"><div><span className="eyebrow">Archive activity</span><h2>Recent documents</h2></div><button className="button ghost" onClick={() => go('documents')}>View all</button></div><DocumentList documents={documents.slice(0, 5)} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} /></section></>}[m
+       {(view === 'documents' || view === 'archived') && <><SearchBar {...filters} onChange={setFilters} /><DocumentList documents={documents} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} /></>}[m
+     </main></div>[m

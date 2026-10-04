@@ -59,13 +59,17 @@ pub struct AuditLog {
 }
 
 pub fn database_connection(app: &AppHandle) -> Result<Connection, String> {
-    let path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("database").join("documents.db");
+    let path = database_path(app)?;
     let connection = Connection::open(path).map_err(|error| format!("Unable to open archive database: {error}"))?;
-    connection.execute_batch("PRAGMA foreign_keys = ON;").map_err(|error| format!("Unable to configure archive database: {error}"))?;
+    connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;").map_err(|error| format!("Unable to configure archive database: {error}"))?;
     // Phase 6 moved application database access into Rust. Ensure the audit
     // schema exists even when the SQL plugin has not opened the database yet.
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);").map_err(|error| format!("Unable to initialize audit schema: {error}"))?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id); CREATE TABLE IF NOT EXISTS backup_history (id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, completed_at TEXT, verified_at TEXT, file_size INTEGER NOT NULL DEFAULT 0, file_hash TEXT, status TEXT NOT NULL, error_message TEXT); CREATE INDEX IF NOT EXISTS idx_backup_history_created_at ON backup_history(created_at DESC); CREATE INDEX IF NOT EXISTS idx_backup_history_status ON backup_history(status);").map_err(|error| format!("Unable to initialize audit and backup schemas: {error}"))?;
     Ok(connection)
+}
+
+pub fn database_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_config_dir().map(|path| path.join("database").join("documents.db")).map_err(|error| error.to_string())
 }
 
 pub fn timestamp() -> String { chrono_like_now() }
