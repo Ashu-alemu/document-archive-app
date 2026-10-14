@@ -35,7 +35,7 @@ function CatalogEditor({ title, values, onCreate, onRename, onDelete }: EditorPr
     <div className="section-heading"><div><span className="eyebrow">Archive organization</span><h2>{title}</h2></div></div>
     <form className="catalog-create" onSubmit={submitNew}><label className="sr-only" htmlFor={`${title}-new`}>New {singular}</label><input id={`${title}-new`} value={newName} onChange={(event) => setNewName(event.target.value)} maxLength={80} placeholder={`Add a ${singular}`} required /><button className="button secondary" disabled={busy}>Add</button></form>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="catalog-list">{values.map(({ name }) => <div className="catalog-row" key={name}>{editing === name ? <><input aria-label={`Rename ${name}`} value={editedName} onChange={(event) => setEditedName(event.target.value)} maxLength={80} autoFocus /><button className="button secondary" onClick={() => submitRename(name)} disabled={busy || !editedName.trim()}>Save</button><button className="button ghost" onClick={() => setEditing('')}>Cancel</button></> : <><strong>{name}</strong><div><button className="button ghost" onClick={() => { setEditing(name); setEditedName(name); setError('') }}>Rename</button><button className="button archive" onClick={() => void run(() => onDelete(name))} disabled={busy}>Delete</button></div></>}</div>)}</div>
+    <div className="catalog-list">{values.map(({ name }) => <div className="catalog-row" key={name}>{editing === name ? <><input aria-label={`Rename ${name}`} value={editedName} onChange={(event) => setEditedName(event.target.value)} maxLength={80} autoFocus /><button type="button" className="button secondary" onClick={() => submitRename(name)} disabled={busy || !editedName.trim()}>Save</button><button type="button" className="button ghost" onClick={() => setEditing('')}>Cancel</button></> : <><strong>{name}</strong><div><button type="button" className="button ghost" onClick={() => { setEditing(name); setEditedName(name); setError('') }}>Rename</button><button type="button" className="button archive" onClick={() => { if (window.confirm(`Delete ${singular} “${name}”?`)) void run(() => onDelete(name)) }} disabled={busy}>Delete</button></div></>}</div>)}</div>
   </section>
 }
 
@@ -55,7 +55,9 @@ export function OrganizationManagement({ token, onChanged }: Props) {
       setError(reason instanceof Error ? reason.message : 'Unable to load archive categories and tags.')
     }
   }, [token])
-  useEffect(() => { void reload() }, [reload]) // oxlint-disable-line react(set-state-in-effect)
+  // Load managed catalog values from the authenticated local database.
+  // oxlint-disable-next-line react(set-state-in-effect)
+  useEffect(() => { void reload() }, [reload])
   const changed = async () => { await reload(); onChanged() }
 
   return <section className="organization-management">

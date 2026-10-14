@@ -35,6 +35,8 @@ function App() {
   const [page, setPage] = useState(0)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [loadingDocuments, setLoadingDocuments] = useState(false)
+  const [actionBusy, setActionBusy] = useState<string | null>(null)
   const loadGeneration = useRef(0)
 
   // oxlint-disable-next-line react(set-state-in-effect)
@@ -50,7 +52,9 @@ function App() {
       setError(reason instanceof Error ? reason.message : 'Unable to load archive categories and tags.')
     }
   }, [user])
-  useEffect(() => { void refreshCatalogs() }, [refreshCatalogs]) // oxlint-disable-line react(set-state-in-effect)
+  // Synchronize the catalog view with the authenticated local database.
+  // oxlint-disable-next-line react(set-state-in-effect)
+  useEffect(() => { void refreshCatalogs() }, [refreshCatalogs])
 
   const loadDocuments = useCallback(async () => {
     const generation = ++loadGeneration.current
@@ -59,6 +63,7 @@ function App() {
     if (!browsing) return
     const dashboard = view === 'dashboard'
     const activeFilters = dashboard ? { ...EMPTY_FILTERS, sortBy: 'created' as const } : filters
+    setLoadingDocuments(true)
     try {
       const [nextResults, recent] = await Promise.all([
         findDocuments(user.token, {
@@ -77,10 +82,14 @@ function App() {
     } catch (reason) {
       if (generation !== loadGeneration.current) return
       setError(reason instanceof Error ? reason.message : 'Unable to load documents.')
+    } finally {
+      if (generation === loadGeneration.current) setLoadingDocuments(false)
     }
   }, [filters, page, user, view])
   // This effect synchronizes the view with the external SQLite data source.
-  useEffect(() => { void loadDocuments() }, [loadDocuments]) // oxlint-disable-line react(set-state-in-effect)
+  // Synchronize the current view with the authenticated local database.
+  // oxlint-disable-next-line react(set-state-in-effect)
+  useEffect(() => { void loadDocuments() }, [loadDocuments])
 
   if (authState === 'loading') return <main className="auth-shell"><p>Opening local archive…</p></main>
   if (authState === 'setup') return <SetupScreen onComplete={account => { setUser(account); setAuthState('authenticated') }} />
@@ -89,7 +98,7 @@ function App() {
 
   const canAdd = user.role !== 'viewer'
   const canManageUsers = user.role === 'admin'
-  const go = (next: View) => { setNotice(''); setError(''); setSelected(null); setPage(0); setView(next) }
+  const go = (next: View, keepNotice = false) => { if (!keepNotice) setNotice(''); setError(''); setSelected(null); setPage(0); setView(next) }
   const saveNew = async (values: DocumentFormValues, file?: SelectedFile) => {
     if (!file) throw new Error('Select a file before saving.')
     const created = await saveDocument(user.token, values, file)
@@ -105,34 +114,58 @@ function App() {
     setView('details')
   }
   const open = async (document: DocumentRecord) => {
+    if (actionBusy) return
+    setActionBusy(`open:${document.id}`)
     try {
       await openDocumentFile(user.token, document)
       if (view === 'dashboard') setRecentDocuments(await findRecentDocuments(user.token, 5))
+      setNotice(`Opened ${document.title}.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to open this file.')
+    } finally {
+      setActionBusy(null)
     }
   }
   const toggleFavorite = async (document: DocumentRecord) => {
+    if (actionBusy) return
+    setActionBusy(`favorite:${document.id}`)
     try {
       await setDocumentFavorite(user.token, document.id, !document.is_favorite)
       await loadDocuments()
       setRecentDocuments((current) => current.map((item) => item.id === document.id ? { ...item, is_favorite: !document.is_favorite } : item))
       if (selected?.id === document.id) setSelected({ ...selected, is_favorite: !document.is_favorite })
+      setNotice(document.is_favorite ? 'Removed from favorites.' : 'Added to favorites.')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to update favorite.')
+    } finally {
+      setActionBusy(null)
     }
   }
   const archive = async () => {
-    if (!selected) return
-    await archiveDocumentRecord(user.token, selected)
-    setNotice('Document archived. The original file was kept.')
-    go('archived')
+    if (!selected || actionBusy || !window.confirm(`Archive “${selected.title}”? The original file will be kept.`)) return
+    setActionBusy(`archive:${selected.id}`)
+    try {
+      await archiveDocumentRecord(user.token, selected)
+      setNotice('Document archived. The original file was kept.')
+      go('archived', true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to archive this document.')
+    } finally {
+      setActionBusy(null)
+    }
   }
   const remove = async () => {
-    if (!selected || !window.confirm('Delete this document and its stored file permanently?')) return
-    await deleteDocumentRecord(user.token, selected.id)
-    setNotice('Document deleted.')
-    go('documents')
+    if (!selected || actionBusy || !window.confirm(`Delete “${selected.title}” and its stored file permanently?`)) return
+    setActionBusy(`delete:${selected.id}`)
+    try {
+      await deleteDocumentRecord(user.token, selected.id)
+      setNotice('Document deleted.')
+      go('documents', true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to delete this document.')
+    } finally {
+      setActionBusy(null)
+    }
   }
   const updateFilters = (next: DocumentSearchFilters) => { setFilters(next); setPage(0) }
   const refreshAfterOrganizationChange = async () => {
@@ -163,13 +196,13 @@ function App() {
     <main className="main-content"><header className="topbar"><div><span className="eyebrow">Your records, organized</span><h1>{heading}</h1></div>{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
       {view === 'add' && <DocumentForm categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => go('documents')} onSave={saveNew} />}
       {view === 'edit' && selected && <DocumentForm initial={selected} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => setView('details')} onSave={saveEdit} />}
-      {view === 'details' && selected && <DocumentDetails document={selected} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}
+      {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}
       {view === 'settings' && canManageUsers && <UserManagement token={user.token} />}
       {view === 'organization' && canManageUsers && <OrganizationManagement token={user.token} onChanged={() => void refreshAfterOrganizationChange()} />}
       {view === 'audit' && canManageUsers && <AuditLog token={user.token} />}
       {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setAuthState('login'); setView('dashboard') }} />}
-      {view === 'dashboard' && <><section className="welcome-card"><div><span className="card-kicker">Offline-first archive</span><h2>A calmer home for important documents.</h2><p>Your records stay on this computer, with metadata in SQLite and actual files in managed storage.</p></div><div className="welcome-icon"><img src="/images/document-archive-logo.png" alt="Church logo" /></div></section><section className="stats-grid"><article className="stat-card"><span className="stat-label">Active documents</span><strong>{results.total}</strong><span className="muted">Across your local archive</span></article><article className="stat-card"><span className="stat-label">Storage</span><strong>Local</strong><span className="muted">Files remain on this device</span></article><article className="stat-card"><span className="stat-label">Search</span><strong>Ready</strong><span className="muted">Search metadata and OCR text</span></article></section>      <section className="recent-section"><div className="section-heading"><div><span className="eyebrow">Archive activity</span><h2>Recent documents</h2></div><button className="button ghost" onClick={() => go('documents')}>Browse all</button></div><DocumentList documents={recentDocuments.length ? recentDocuments : selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} /></section></>}
-      {(view === 'documents' || view === 'favorites' || view === 'archived') && <><SearchBar filters={filters} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onChange={updateFilters} /><p className="result-count">{results.total} {results.total === 1 ? 'document' : 'documents'} found</p><DocumentList documents={selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} />{totalPages > 1 && <div className="audit-pagination"><button className="button secondary" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page + 1} of {totalPages}</span><button className="button secondary" disabled={page + 1 >= totalPages} onClick={() => setPage(page + 1)}>Next</button></div>}</>}
+      {view === 'dashboard' && <><section className="welcome-card"><div><span className="card-kicker">Offline-first archive</span><h2>A calmer home for important documents.</h2><p>Your records stay on this computer, with metadata in SQLite and actual files in managed storage.</p></div><div className="welcome-icon"><img src="/images/document-archive-logo.png" alt="Church logo" /></div></section><section className="stats-grid"><article className="stat-card"><span className="stat-label">Active documents</span><strong>{results.total}</strong><span className="muted">Across your local archive</span></article><article className="stat-card"><span className="stat-label">Storage</span><strong>Local</strong><span className="muted">Files remain on this device</span></article><article className="stat-card"><span className="stat-label">Search</span><strong>Ready</strong><span className="muted">Search metadata and OCR text</span></article></section>      <section className="recent-section"><div className="section-heading"><div><span className="eyebrow">Archive activity</span><h2>Recent documents</h2></div><button type="button" className="button ghost" onClick={() => go('documents')}>Browse all</button></div><DocumentList loading={loadingDocuments} busy={Boolean(actionBusy)} emptyTitle="No documents yet" emptyDescription="Add your first document to start building the archive." documents={recentDocuments.length ? recentDocuments : selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} /></section></>}
+      {(view === 'documents' || view === 'favorites' || view === 'archived') && <><SearchBar filters={filters} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onChange={updateFilters} /><p className="result-count" role="status" aria-live="polite">{loadingDocuments ? 'Searching local archive…' : `${results.total} ${results.total === 1 ? 'document' : 'documents'} found`}</p><DocumentList loading={loadingDocuments} busy={Boolean(actionBusy)} documents={selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} />{totalPages > 1 && <div className="audit-pagination"><button type="button" className="button secondary" disabled={page === 0 || loadingDocuments} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page + 1} of {totalPages}</span><button type="button" className="button secondary" disabled={page + 1 >= totalPages || loadingDocuments} onClick={() => setPage(page + 1)}>Next</button></div>}</>}
     </main></div>
 }
 
