@@ -211,7 +211,8 @@ pub fn create_user(app: AppHandle, state: State<'_, SessionState>, token: String
 pub fn update_user(app: AppHandle, state: State<'_, SessionState>, token: String, user_id: String, display_name: String, active: bool) -> Result<(), String> {
     let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?;
     if current.id == user_id && !active { return Err("You cannot deactivate the active account.".into()); }
-    let previous: (String, i64) = connection.query_row("SELECT display_name, active FROM users WHERE id = ?", params![user_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| "Unable to update user.".to_string())?;
+    let previous: (String, i64, String) = connection.query_row("SELECT u.display_name, u.active, r.id FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ?", params![user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|_| "Unable to update user.".to_string())?;
+    if previous.2 == "admin" && previous.1 == 1 && !active { let admins: i64 = connection.query_row("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id = u.id WHERE ur.role_id = 'admin' AND u.active = 1", [], |row| row.get(0)).map_err(|error| error.to_string())?; if admins <= 1 { return Err("The archive must retain at least one active administrator.".into()); } }
     connection.execute("UPDATE users SET display_name = ?, active = ?, updated_at = ? WHERE id = ?", params![display_name.trim(), if active { 1 } else { 0 }, timestamp(), user_id]).map_err(|_| "Unable to update user.".to_string())?;
     if previous.0 != display_name.trim() { audit(&connection, Some(&current.id), "user_updated", "user", Some(&user_id), Some("display_name_changed"))?; }
     if previous.1 != if active { 1 } else { 0 } { audit(&connection, Some(&current.id), if active { "user_activated" } else { "user_deactivated" }, "user", Some(&user_id), None)?; }
@@ -223,18 +224,26 @@ pub fn change_user_role(app: AppHandle, state: State<'_, SessionState>, token: S
     let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?;
     if !matches!(role.as_str(), "admin" | "manager" | "contributor" | "viewer") { return Err("Invalid role.".into()); }
     let current_role: String = connection.query_row("SELECT r.id FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ?", params![user_id], |row| row.get(0)).map_err(|error| error.to_string())?;
-    if current_role == "admin" && role != "admin" { let admins: i64 = connection.query_row("SELECT COUNT(*) FROM user_roles WHERE role_id = 'admin'", [], |row| row.get(0)).map_err(|error| error.to_string())?; if admins <= 1 { return Err("The archive must retain at least one administrator.".into()); } }
+    let active: i64 = connection.query_row("SELECT active FROM users WHERE id = ?", params![user_id], |row| row.get(0)).map_err(|_| "User not found.".to_string())?;
+    if current_role == "admin" && role != "admin" && active == 1 { let admins: i64 = connection.query_row("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id = u.id WHERE ur.role_id = 'admin' AND u.active = 1", [], |row| row.get(0)).map_err(|error| error.to_string())?; if admins <= 1 { return Err("The archive must retain at least one active administrator.".into()); } }
     connection.execute("UPDATE user_roles SET role_id = ? WHERE user_id = ?", params![role, user_id]).map_err(|error| error.to_string())?;
     audit(&connection, Some(&current.id), "user_role_changed", "user", Some(&user_id), Some(&format!("Role changed to {role}")))
 }
 
 #[tauri::command]
 pub fn delete_user(app: AppHandle, state: State<'_, SessionState>, token: String, user_id: String) -> Result<(), String> {
-    let connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?; if current.id == user_id { return Err("You cannot delete the active account.".into()); }
-    let role: String = connection.query_row("SELECT r.id FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ?", params![user_id], |row| row.get(0)).map_err(|error| error.to_string())?;
-    if role == "admin" { let admins: i64 = connection.query_row("SELECT COUNT(*) FROM user_roles WHERE role_id = 'admin'", [], |row| row.get(0)).map_err(|error| error.to_string())?; if admins <= 1 { return Err("The archive must retain at least one administrator.".into()); } }
-    connection.execute("DELETE FROM users WHERE id = ?", params![user_id]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&current.id), "user_deleted", "user", Some(&user_id), None)
+    let mut connection = database_connection(&app)?; let current = actor(&connection, &state, &token)?; require(&current, "admin")?;
+    let target_id = user_id.trim();
+    if target_id.is_empty() || target_id.len() > 64 || !target_id.chars().all(|character| character.is_ascii_alphanumeric() || character == '-') { return Err("Invalid user ID.".into()); }
+    if current.id == target_id { return Err("You cannot delete the active account.".into()); }
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let (username, display_name, role, active): (String, String, String, i64) = transaction.query_row("SELECT u.username, u.display_name, r.id, u.active FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ?", params![target_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).map_err(|_| "User not found.".to_string())?;
+    if role == "admin" && active == 1 { let admins: i64 = transaction.query_row("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id = u.id WHERE ur.role_id = 'admin' AND u.active = 1", [], |row| row.get(0)).map_err(|error| error.to_string())?; if admins <= 1 { return Err("The archive must retain at least one active administrator.".into()); } }
+    transaction.execute("DELETE FROM users WHERE id = ?", params![target_id]).map_err(|error| error.to_string())?;
+    audit(&transaction, Some(&current.id), "user_deleted", "user", Some(target_id), Some(&format!("Deleted account {username} ({display_name}); documents and audit history retained")))?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    if let Ok(mut session) = state.active.lock() { if session.as_ref().is_some_and(|value| value.user_id == target_id) { *session = None; } }
+    Ok(())
 }
 
 #[tauri::command]

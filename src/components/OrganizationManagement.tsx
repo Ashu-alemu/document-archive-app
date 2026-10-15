@@ -61,7 +61,7 @@ export function OrganizationManagement({ token, onChanged }: Props) {
   const changed = async () => { await reload(); onChanged() }
 
   return <section className="organization-management">
-    <p className="muted">Categories organize document types. Renaming one updates its existing documents; a category in use must be reassigned before it can be deleted. Tag changes are applied to document metadata.</p>
+    <p className="muted">Categories organize document types. Renaming one updates its existing documents; a category in use must be reassigned before it can be deleted. Tag changes are applied to document metadata.-ምድቦች የሰነድ ዓይነቶችን ያደራጃሉ። አንድን ስም መቀየር ያሉትን ሰነዶቹን ያዘምናል፤ ጥቅም ላይ የዋለ ምድብ ከመሰረዙ በፊት እንደገና መመደብ አለበት። የመለያ ለውጦች በሰነድ ሜታዳታ ላይ ይተገበራሉ።</p>
     {error && <p className="form-error" role="alert">{error}</p>}
     <CatalogEditor title="Categories" values={categories} onCreate={async (name) => { await createCategory(token, name); await changed() }} onRename={async (oldName, newName) => { await renameCategory(token, oldName, newName); await changed() }} onDelete={async (name) => { await deleteCategory(token, name); await changed() }} />
     <CatalogEditor title="Tags" values={tags} onCreate={async (name) => { await createTag(token, name); await changed() }} onRename={async (oldName, newName) => { await renameTag(token, oldName, newName); await changed() }} onDelete={async (name) => { await deleteTag(token, name); await changed() }} />
