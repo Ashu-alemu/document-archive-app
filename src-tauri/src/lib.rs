@@ -425,6 +425,12 @@ pub fn run() {
             sql: include_str!("../migrations/0008_advanced_archive.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "add_notifications",
+            sql: include_str!("../migrations/0009_add_notifications.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -460,6 +466,10 @@ pub fn run() {
             security::delete_user,
             security::change_password,
             security::get_audit_logs,
+            security::list_notifications,
+            security::count_unread_notifications,
+            security::mark_notification_read,
+            security::mark_all_notifications_read,
             backup_commands::create_backup,
             backup_commands::list_backups,
             backup_commands::verify_backup,

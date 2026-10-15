@@ -11,6 +11,7 @@ import './App.css'
 import { LoginScreen, SetupScreen, UserManagement } from './components/AuthScreens'
 import { AuditLog } from './components/AuditLog'
 import { BackupScreen } from './components/BackupScreen'
+import { NotificationCenter } from './components/NotificationCenter'
 import { hasUsers, logout } from './services/authService'
 import type { SessionUser } from './types/auth'
 
@@ -37,6 +38,7 @@ function App() {
   const [error, setError] = useState('')
   const [loadingDocuments, setLoadingDocuments] = useState(false)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
+  const [notificationRefreshKey, setNotificationRefreshKey] = useState(0)
   const loadGeneration = useRef(0)
 
   // oxlint-disable-next-line react(set-state-in-effect)
@@ -103,6 +105,7 @@ function App() {
     if (!file) throw new Error('Select a file before saving.')
     const created = await saveDocument(user.token, values, file)
     setNotice(`Document saved successfully. ${created.id}`)
+    setNotificationRefreshKey((key) => key + 1)
     setView('documents')
     setPage(0)
   }
@@ -110,6 +113,7 @@ function App() {
     if (!selected) return
     await editDocument(user.token, selected.id, { ...values, status: selected.status })
     setNotice('Metadata updated successfully.')
+    setNotificationRefreshKey((key) => key + 1)
     setSelected(await findDocumentById(user.token, selected.id))
     setView('details')
   }
@@ -118,6 +122,7 @@ function App() {
     setActionBusy(`open:${document.id}`)
     try {
       await openDocumentFile(user.token, document)
+      setNotificationRefreshKey((key) => key + 1)
       if (view === 'dashboard') setRecentDocuments(await findRecentDocuments(user.token, 5))
       setNotice(`Opened ${document.title}.`)
     } catch (reason) {
@@ -147,6 +152,7 @@ function App() {
     try {
       await archiveDocumentRecord(user.token, selected)
       setNotice('Document archived. The original file was kept.')
+      setNotificationRefreshKey((key) => key + 1)
       go('archived', true)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to archive this document.')
@@ -193,7 +199,7 @@ function App() {
     <button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>
     {canManageUsers && <><button className={`nav-item ${view === 'organization' ? 'active' : ''}`} onClick={() => go('organization')}><span>⌘</span>Categories & tags</button><button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Users</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}
   </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setAuthState('login'); setView('dashboard') }}>Sign out</button></div></aside>
-    <main className="main-content"><header className="topbar"><div><span className="eyebrow">አገልግሎታችንን ቅድስት ሥላሴ ይባርኩልን😇</span><h1>{heading}</h1></div>{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
+    <main className="main-content"><header className="topbar"><div><span className="eyebrow">አገልግሎታችንን ቅድስት ሥላሴ ይባርኩልን😇</span><h1>{heading}</h1></div><div className="topbar-actions">{canManageUsers && <NotificationCenter token={user.token} refreshKey={notificationRefreshKey} />}{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</div></header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
       {view === 'add' && <DocumentForm categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => go('documents')} onSave={saveNew} />}
       {view === 'edit' && selected && <DocumentForm initial={selected} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => setView('details')} onSave={saveEdit} />}
       {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}

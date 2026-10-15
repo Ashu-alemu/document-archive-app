@@ -1,4 +1,4 @@
-use crate::security::{actor, audit, database_connection, database_path, require, timestamp, SessionState};
+use crate::security::{actor, audit, database_connection, database_path, notify_best_effort, require, timestamp, SessionState};
 use crate::storage_root;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -115,8 +115,8 @@ pub fn create_backup(app: AppHandle, state: State<'_, SessionState>, token: Stri
     })();
     let _ = fs::remove_dir_all(&staging);
     match result {
-        Ok((size, hash)) => { let completed = timestamp(); connection.execute("UPDATE backup_history SET completed_at = ?, verified_at = ?, file_size = ?, file_hash = ?, status = 'verified' WHERE id = ?", params![completed, completed, size, hash, id]).map_err(|_| "Unable to update backup history.".to_string())?; audit(&connection, Some(&current.id), "backup_verified", "backup", Some(&id), None)?; connection.query_row("SELECT id, file_name, created_at, completed_at, verified_at, file_size, file_hash, status FROM backup_history WHERE id = ?", params![id], backup_record).map_err(|_| "Unable to load backup record.".to_string()) }
-        Err(error) => { let _ = fs::remove_file(&destination); let _ = connection.execute("UPDATE backup_history SET status = 'failed', error_message = ? WHERE id = ?", params![error, id]); Err("Backup creation failed.".into()) }
+        Ok((size, hash)) => { let completed = timestamp(); connection.execute("UPDATE backup_history SET completed_at = ?, verified_at = ?, file_size = ?, file_hash = ?, status = 'verified' WHERE id = ?", params![completed, completed, size, hash, id]).map_err(|_| "Unable to update backup history.".to_string())?; audit(&connection, Some(&current.id), "backup_verified", "backup", Some(&id), None)?; notify_best_effort(&connection, Some(&current.id), "backup_created", "Backup created", "A verified backup was created successfully.", Some("backup"), Some(&id), "info"); connection.query_row("SELECT id, file_name, created_at, completed_at, verified_at, file_size, file_hash, status FROM backup_history WHERE id = ?", params![id], backup_record).map_err(|_| "Unable to load backup record.".to_string()) }
+        Err(error) => { let _ = fs::remove_file(&destination); let _ = connection.execute("UPDATE backup_history SET status = 'failed', error_message = ? WHERE id = ?", params![error, id]); let _ = audit(&connection, Some(&current.id), "backup_failed", "backup", Some(&id), Some("Backup creation failed")); notify_best_effort(&connection, Some(&current.id), "backup_failed", "Backup failed", "A backup could not be completed.", Some("backup"), Some(&id), "error"); Err("Backup creation failed.".into()) }
     }
 }
 
@@ -149,5 +149,5 @@ pub fn restore_backup(app: AppHandle, state: State<'_, SessionState>, token: Str
         let _ = fs::remove_file(&old_db); let _ = fs::remove_dir_all(&old_storage); Ok(())
     })();
     let _ = fs::remove_dir_all(&staging);
-    match result { Ok(()) => { let restored = database_connection(&app)?; let restored_actor: Option<String> = restored.query_row("SELECT id FROM users WHERE id = ?", params![current.id], |row| row.get(0)).ok(); audit(&restored, restored_actor.as_deref(), "backup_restore_completed", "backup", Some(&backup_id), None)?; Ok(()) }, Err(error) => { audit(&connection, Some(&current.id), "backup_restore_failed", "backup", Some(&backup_id), Some("Restore failed"))?; Err(error) } }
+    match result { Ok(()) => { let restored = database_connection(&app)?; let restored_actor: Option<String> = restored.query_row("SELECT id FROM users WHERE id = ?", params![current.id], |row| row.get(0)).ok(); audit(&restored, restored_actor.as_deref(), "backup_restore_completed", "backup", Some(&backup_id), None)?; notify_best_effort(&restored, restored_actor.as_deref(), "backup_restore_completed", "Backup restored", "A backup was restored successfully.", Some("backup"), Some(&backup_id), "warning"); Ok(()) }, Err(error) => { audit(&connection, Some(&current.id), "backup_restore_failed", "backup", Some(&backup_id), Some("Restore failed"))?; notify_best_effort(&connection, Some(&current.id), "backup_restore_failed", "Backup restore failed", "A backup could not be restored.", Some("backup"), Some(&backup_id), "error"); Err(error) } }
 }

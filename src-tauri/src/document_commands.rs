@@ -2,7 +2,7 @@ use rusqlite::{params, params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State};
-use crate::{managed_file_path, security::{actor, audit, require, SessionState}};
+use crate::{managed_file_path, security::{actor, audit, notify_best_effort, require, SessionState}};
 
 #[cfg(test)]
 mod tests {
@@ -163,7 +163,9 @@ pub fn insert_document(app: AppHandle, state: State<'_, SessionState>, token: St
     sync_tag_catalog(&transaction, record.tags.as_deref())?;
     let details = serde_json::to_string(&json!({"title": record.title})).map_err(|_| "Unable to record document audit.".to_string())?;
     audit(&transaction, Some(&current.id), "document_created", "document", Some(&record.id), Some(&details))?;
-    transaction.commit().map_err(|error| error.to_string())
+    transaction.commit().map_err(|error| error.to_string())?;
+    notify_best_effort(&connection, Some(&current.id), "document_created", "Document created", "A document was added to the archive.", Some("document"), Some(&record.id), "info");
+    Ok(())
 }
 
 #[tauri::command]
@@ -178,8 +180,13 @@ pub fn update_document(app: AppHandle, state: State<'_, SessionState>, token: St
     transaction.execute("UPDATE documents SET title = ?, document_type = ?, document_date = ?, reference_number = ?, person_or_organization = ?, department = ?, description = ?, tags = ?, status = ?, updated_at = ? WHERE id = ?", params![values.title, values.document_type, values.document_date, values.reference_number, values.person_or_organization, values.department, values.description, values.tags, values.status, crate::security::timestamp(), id]).map_err(|error| error.to_string())?;
     sync_tag_catalog(&transaction, values.tags.as_deref())?;
     if previous.8 != values.status {
-        audit(&transaction, Some(&current.id), if values.status == "archived" { "document_archived" } else { "document_restored" }, "document", Some(&id), None)?;
-        return transaction.commit().map_err(|error| error.to_string());
+        let action = if values.status == "archived" { "document_archived" } else { "document_restored" };
+        audit(&transaction, Some(&current.id), action, "document", Some(&id), None)?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        let title = if values.status == "archived" { "Document archived" } else { "Document restored" };
+        let message = if values.status == "archived" { "A document was archived." } else { "A document was restored." };
+        notify_best_effort(&connection, Some(&current.id), action, title, message, Some("document"), Some(&id), "info");
+        return Ok(());
     }
     let fields = [
         ("title", previous.0 != values.title), ("document_type", previous.1 != values.document_type), ("document_date", previous.2 != values.document_date),
@@ -188,7 +195,9 @@ pub fn update_document(app: AppHandle, state: State<'_, SessionState>, token: St
     ].into_iter().filter_map(|(field, changed)| changed.then_some(field)).collect::<Vec<_>>();
     let details = serde_json::to_string(&json!({"changed_fields": fields})).map_err(|_| "Unable to record document audit.".to_string())?;
     audit(&transaction, Some(&current.id), "document_updated", "document", Some(&id), Some(&details))?;
-    transaction.commit().map_err(|error| error.to_string())
+    transaction.commit().map_err(|error| error.to_string())?;
+    notify_best_effort(&connection, Some(&current.id), "document_updated", "Document metadata updated", "Document metadata was updated.", Some("document"), Some(&id), "info");
+    Ok(())
 }
 
 #[tauri::command]
@@ -208,7 +217,9 @@ pub fn open_document(app: AppHandle, state: State<'_, SessionState>, token: Stri
     let path = managed_file_path(&app, &path)?;
     tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|error| format!("Unable to open archived file: {error}"))?;
     connection.execute("INSERT INTO recent_documents (user_id, document_id, last_opened_at) VALUES (?, ?, ?) ON CONFLICT(user_id, document_id) DO UPDATE SET last_opened_at = excluded.last_opened_at", params![current.id, id, crate::security::timestamp()]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&current.id), "document_opened", "document", Some(&id), None)
+    audit(&connection, Some(&current.id), "document_opened", "document", Some(&id), None)?;
+    notify_best_effort(&connection, Some(&current.id), "document_opened", "Document opened", "A document was opened.", Some("document"), Some(&id), "info");
+    Ok(())
 }
 
 #[tauri::command]
