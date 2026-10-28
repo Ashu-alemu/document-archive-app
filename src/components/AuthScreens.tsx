@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { changeUserRole, createUser, deleteUser, listUsers, updateUser } from '../database/authRepository'
+import { changeUserRole, createUser, deleteUser, getSecurityPreferences, listUsers, reauthenticate, saveSecurityPreferences, updateUser } from '../database/authRepository'
 import { authenticate, createInitialAdmin } from '../services/authService'
 import { ROLE_OPTIONS, type SessionUser } from '../types/auth'
 
@@ -17,6 +17,19 @@ export function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void 
   const [username, setUsername] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
   const submit = async (event: FormEvent) => { event.preventDefault(); setError(''); setBusy(true); try { onLogin(await authenticate(username, password)) } catch (reason) { setError(errorMessage(reason, 'Unable to sign in.')) } finally { setBusy(false) } }
   return <AuthLayout eyebrow="Local archive" title="Sign in" subtitle="Use your local archive account to continue." churchLogo><form className="auth-form" onSubmit={submit}><label>Username<input required autoFocus value={username} onChange={e => setUsername(e.target.value)} /></label><label>Password<input required type="password" value={password} onChange={e => setPassword(e.target.value)} /></label><AuthError message={error} /><button className="button primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form></AuthLayout>
+}
+
+export function LockScreen({ user, onUnlock }: { user: Pick<SessionUser, 'displayName' | 'username'>; onUnlock: (account: SessionUser) => void }) {
+  const [password, setPassword] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
+  const submit = async (event: FormEvent) => { event.preventDefault(); setError(''); setBusy(true); try { onUnlock(await reauthenticate(user.username, password)) } catch (reason) { setError(errorMessage(reason, 'Incorrect password.')); setPassword('') } finally { setBusy(false) } }
+  return <main className="auth-shell lock-shell"><section className="auth-card lock-card"><div className="brand-mark auth-brand-mark"><img src="/images/document-archive-logo.png" alt="Ethiopian Orthodox church logo" /></div><span className="eyebrow">Archive locked</span><h1>Welcome back, {user.displayName}</h1><p>This archive was locked automatically after inactivity or because the computer resumed from sleep. Sign in again to continue.</p><form className="auth-form" onSubmit={submit}><label>Current password<input required autoFocus type="password" value={password} onChange={event => setPassword(event.target.value)} /></label><AuthError message={error} /><button className="button primary" disabled={busy}>{busy ? 'Unlocking…' : 'Unlock archive'}</button></form></section></main>
+}
+
+export function SecurityPreferences({ token }: { token: string }) {
+  const [minutes, setMinutes] = useState(5); const [busy, setBusy] = useState(true); const [error, setError] = useState(''); const [notice, setNotice] = useState('')
+  useEffect(() => { void getSecurityPreferences(token).then(value => setMinutes(value.inactivityTimeoutMinutes)).catch(reason => setError(errorMessage(reason, 'Unable to load security preferences.'))).finally(() => setBusy(false)) }, [token])
+  const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(''); setNotice(''); try { await saveSecurityPreferences(token, minutes); setNotice('Inactivity timeout saved successfully.') } catch (reason) { setError(errorMessage(reason, 'Unable to save security preferences.')) } finally { setBusy(false) } }
+  return <section className="settings-panel security-preferences"><div className="section-heading"><div><span className="eyebrow">Personal security</span><h2>Automatic lock</h2></div></div><p className="muted">The archive locks and revokes your current session after this period without mouse, keyboard, touch, or other direct interaction. Five minutes is the default for existing accounts.</p><form className="security-form" onSubmit={save}><label>Lock after<select value={minutes} disabled={busy} onChange={event => setMinutes(Number(event.target.value))}>{[1, 2, 5, 10, 15].map(value => <option key={value} value={value}>{value} minute{value === 1 ? '' : 's'}</option>)}</select></label><button className="button primary" disabled={busy}>{busy ? 'Loading…' : 'Save timeout'}</button></form>{error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="notice" role="status">✓ {notice}</p>}</section>
 }
 
 function AuthLayout({ eyebrow, title, subtitle, children, churchLogo = false }: { eyebrow: string; title: string; subtitle: string; children: ReactNode; churchLogo?: boolean }) { return <main className="auth-shell"><section className="auth-card"><div className={`brand-mark ${churchLogo ? 'auth-brand-mark' : ''}`}>{churchLogo ? <img src="/images/document-archive-logo.png" alt="Ethiopian Orthodox church logo" /> : 'DA'}</div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{subtitle}</p>{children}</section></main> }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { archiveDocumentRecord, deleteDocumentRecord, editDocument, openDocumentFile, saveDocument } from './services/documentService'
 import { findDocumentById, findDocuments, findRecentDocuments, listCategories, listTags, setDocumentFavorite } from './database/documentRepository'
 import { DocumentDetails } from './components/DocumentDetails'
@@ -8,11 +9,12 @@ import { SearchBar } from './components/SearchBar'
 import { OrganizationManagement } from './components/OrganizationManagement'
 import type { DocumentFormValues, DocumentRecord, DocumentSearchFilters, DocumentSearchResults, ManagedValue, SelectedFile } from './types/document'
 import './App.css'
-import { LoginScreen, SetupScreen, UserManagement } from './components/AuthScreens'
+import { LoginScreen, LockScreen, SecurityPreferences, SetupScreen, UserManagement } from './components/AuthScreens'
 import { AuditLog } from './components/AuditLog'
 import { BackupScreen } from './components/BackupScreen'
 import { NotificationCenter } from './components/NotificationCenter'
 import { hasUsers, logout } from './services/authService'
+import { getSecurityPreferences, lockSession } from './database/authRepository'
 import type { SessionUser } from './types/auth'
 
 type View = 'dashboard' | 'documents' | 'favorites' | 'add' | 'archived' | 'settings' | 'organization' | 'audit' | 'backup' | 'details' | 'edit'
@@ -24,8 +26,10 @@ const EMPTY_FILTERS: DocumentSearchFilters = {
 }
 
 function App() {
-  const [authState, setAuthState] = useState<'loading' | 'setup' | 'login' | 'authenticated'>('loading')
+  const [authState, setAuthState] = useState<'loading' | 'setup' | 'login' | 'authenticated' | 'locked'>('loading')
   const [user, setUser] = useState<SessionUser | null>(null)
+  const [lockedUser, setLockedUser] = useState<Pick<SessionUser, 'displayName' | 'username'> | null>(null)
+  const [timeoutMinutes, setTimeoutMinutes] = useState(5)
   const [view, setView] = useState<View>('dashboard')
   const [results, setResults] = useState<DocumentSearchResults>({ documents: [], total: 0 })
   const [recentDocuments, setRecentDocuments] = useState<DocumentRecord[]>([])
@@ -40,9 +44,42 @@ function App() {
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [notificationRefreshKey, setNotificationRefreshKey] = useState(0)
   const loadGeneration = useRef(0)
+  const lastActivity = useRef(0)
+  const timeoutHandle = useRef<number | undefined>(undefined)
 
   // oxlint-disable-next-line react(set-state-in-effect)
   useEffect(() => { void hasUsers().then(exists => setAuthState(exists ? 'login' : 'setup')).catch(() => setAuthState('login')) }, [])
+
+  const lock = useCallback(async (reason: 'inactivity' | 'suspend') => {
+    if (!user || authState !== 'authenticated') return
+    const identity = { displayName: user.displayName, username: user.username }
+    try { await lockSession(user.token, reason) } catch (error) { if (reason === 'inactivity') setError(error instanceof Error ? error.message : 'Unable to lock the archive.'); return }
+    setLockedUser(identity); setUser(null); setAuthState('locked'); setSelected(null); setResults({ documents: [], total: 0 }); setRecentDocuments([]); setCategories([]); setTags([]); setView('dashboard')
+  }, [authState, user])
+
+  useEffect(() => {
+    if (!user || authState !== 'authenticated') return
+    let cancelled = false
+    void getSecurityPreferences(user.token).then(preferences => { if (!cancelled) setTimeoutMinutes(preferences.inactivityTimeoutMinutes) }).catch(() => { if (!cancelled) setTimeoutMinutes(5) })
+    return () => { cancelled = true }
+  }, [authState, user])
+
+  useEffect(() => {
+    if (!user || authState !== 'authenticated') return
+    const activity = () => { lastActivity.current = Date.now() }
+    const events = ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel']
+    events.forEach(event => window.addEventListener(event, activity, { passive: true }))
+    const tick = () => { const elapsed = Date.now() - lastActivity.current; const delay = timeoutMinutes * 60_000; if (elapsed >= delay) void lock('inactivity'); else timeoutHandle.current = window.setTimeout(tick, delay - elapsed) }
+    lastActivity.current = Date.now(); timeoutHandle.current = window.setTimeout(tick, timeoutMinutes * 60_000)
+    return () => { events.forEach(event => window.removeEventListener(event, activity)); if (timeoutHandle.current !== undefined) window.clearTimeout(timeoutHandle.current) }
+  }, [authState, lock, timeoutMinutes, user])
+
+  useEffect(() => {
+    if (!isDesktop()) return
+    let active = true
+    const unlisten = Promise.all([listen('system-suspend', () => { if (active) void lock('suspend') }), listen('system-resume', () => { if (active && user) void lock('suspend') })])
+    return () => { active = false; void unlisten.then(cleanups => cleanups.forEach(cleanup => cleanup())) }
+  }, [lock, user])
 
   const refreshCatalogs = useCallback(async () => {
     if (!user || !isDesktop()) return
@@ -96,6 +133,7 @@ function App() {
   if (authState === 'loading') return <main className="auth-shell"><p>Opening local archive…</p></main>
   if (authState === 'setup') return <SetupScreen onComplete={account => { setUser(account); setAuthState('authenticated') }} />
   if (authState === 'login') return <LoginScreen onLogin={account => { setUser(account); setAuthState('authenticated') }} />
+  if (authState === 'locked' && lockedUser) return <LockScreen user={lockedUser} onUnlock={account => { setLockedUser(null); setUser(account); setAuthState('authenticated'); setNotice('Archive unlocked successfully.') }} />
   if (!user) return null
 
   const canAdd = user.role !== 'viewer'
@@ -197,13 +235,14 @@ function App() {
     <button className={`nav-item ${view === 'favorites' ? 'active' : ''}`} onClick={() => go('favorites')}><span>★</span>Favorites</button>
     {canAdd && <button className={`nav-item ${view === 'add' ? 'active' : ''}`} onClick={() => go('add')}><span>＋</span>Add document</button>}
     <button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>
-    {canManageUsers && <><button className={`nav-item ${view === 'organization' ? 'active' : ''}`} onClick={() => go('organization')}><span>⌘</span>Categories & tags</button><button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Users</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}
+    {canManageUsers && <><button className={`nav-item ${view === 'organization' ? 'active' : ''}`} onClick={() => go('organization')}><span>⌘</span>Categories & tags</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}
+    <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Security</button>
   </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setAuthState('login'); setView('dashboard') }}>Sign out</button></div></aside>
     <main className="main-content"><header className="topbar"><div><span className="eyebrow">አገልግሎታችንን ቅድስት ሥላሴ ይባርኩልን😇</span><h1>{heading}</h1></div><div className="topbar-actions">{canManageUsers && <NotificationCenter token={user.token} refreshKey={notificationRefreshKey} />}{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</div></header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
       {view === 'add' && <DocumentForm categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => go('documents')} onSave={saveNew} />}
       {view === 'edit' && selected && <DocumentForm initial={selected} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => setView('details')} onSave={saveEdit} />}
       {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}
-      {view === 'settings' && canManageUsers && <UserManagement token={user.token} currentUserId={user.id} />}
+      {view === 'settings' && <><SecurityPreferences token={user.token} />{canManageUsers && <UserManagement token={user.token} currentUserId={user.id} />}</>}
       {view === 'organization' && canManageUsers && <OrganizationManagement token={user.token} onChanged={() => void refreshAfterOrganizationChange()} />}
       {view === 'audit' && canManageUsers && <AuditLog token={user.token} />}
       {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setAuthState('login'); setView('dashboard') }} />}

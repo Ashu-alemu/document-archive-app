@@ -7,7 +7,7 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod document_commands;
@@ -431,6 +431,7 @@ pub fn run() {
             sql: include_str!("../migrations/0009_add_notifications.sql"),
             kind: MigrationKind::Up,
         },
+        Migration { version: 10, description: "add_security_preferences", sql: include_str!("../migrations/0010_add_security_preferences.sql"), kind: MigrationKind::Up },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -445,6 +446,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(target_os = "linux")]
+            start_suspend_monitor(app.handle().clone());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -459,6 +462,10 @@ pub fn run() {
             security::setup_admin,
             security::login,
             security::logout,
+            security::lock_session,
+            security::reauthenticate,
+            security::get_security_preferences,
+            security::save_security_preferences,
             security::list_users,
             security::create_user,
             security::update_user,
@@ -498,4 +505,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(target_os = "linux")]
+fn start_suspend_monitor(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(mut monitor) = Command::new("dbus-monitor")
+            .args(["--system", "type='signal',sender='org.freedesktop.login1',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'"])
+            .stdout(std::process::Stdio::piped())
+            .spawn() else { log::warn!("Suspend monitoring unavailable: dbus-monitor is not installed."); return; };
+        let Some(stdout) = monitor.stdout.take() else { return; };
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let mut pending_signal = false;
+        loop {
+            line.clear();
+            if std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) == 0 { break; }
+            if line.contains("member=\"PrepareForSleep\"") { pending_signal = true; continue; }
+            if pending_signal && line.contains("boolean true") { let _ = app.emit("system-suspend", ()); pending_signal = false; }
+            else if pending_signal && line.contains("boolean false") { let _ = app.emit("system-resume", ()); pending_signal = false; }
+        }
+    });
 }

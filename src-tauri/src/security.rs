@@ -27,6 +27,12 @@ pub struct SessionUser {
     pub role_name: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityPreferences {
+    pub inactivity_timeout_minutes: u32,
+}
+
 #[derive(Clone)]
 pub struct Actor {
     pub id: String,
@@ -79,7 +85,7 @@ pub fn database_connection(app: &AppHandle) -> Result<Connection, String> {
     connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;").map_err(|error| format!("Unable to configure archive database: {error}"))?;
     // Phase 6 moved application database access into Rust. Ensure the audit
     // schema exists even when the SQL plugin has not opened the database yet.
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id); CREATE TABLE IF NOT EXISTS backup_history (id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, completed_at TEXT, verified_at TEXT, file_size INTEGER NOT NULL DEFAULT 0, file_hash TEXT, status TEXT NOT NULL, error_message TEXT); CREATE INDEX IF NOT EXISTS idx_backup_history_created_at ON backup_history(created_at DESC); CREATE INDEX IF NOT EXISTS idx_backup_history_status ON backup_history(status); CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, action TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, entity_type TEXT, entity_id TEXT, actor_id TEXT REFERENCES users(id) ON DELETE SET NULL, severity TEXT NOT NULL DEFAULT 'info', created_at TEXT NOT NULL, read_at TEXT); CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, id DESC); CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at, created_at DESC);").map_err(|error| format!("Unable to initialize audit and backup schemas: {error}"))?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC); CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action); CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id); CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id); CREATE TABLE IF NOT EXISTS backup_history (id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, completed_at TEXT, verified_at TEXT, file_size INTEGER NOT NULL DEFAULT 0, file_hash TEXT, status TEXT NOT NULL, error_message TEXT); CREATE INDEX IF NOT EXISTS idx_backup_history_created_at ON backup_history(created_at DESC); CREATE INDEX IF NOT EXISTS idx_backup_history_status ON backup_history(status); CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, action TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, entity_type TEXT, entity_id TEXT, actor_id TEXT REFERENCES users(id) ON DELETE SET NULL, severity TEXT NOT NULL DEFAULT 'info', created_at TEXT NOT NULL, read_at TEXT); CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, id DESC); CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at, created_at DESC); CREATE TABLE IF NOT EXISTS user_security_preferences (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, inactivity_timeout_minutes INTEGER NOT NULL DEFAULT 5, updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_user_security_preferences_timeout ON user_security_preferences(inactivity_timeout_minutes);").map_err(|error| format!("Unable to initialize audit and backup schemas: {error}"))?;
     Ok(connection)
 }
 
@@ -134,6 +140,26 @@ pub fn require(actor: &Actor, permission: &str) -> Result<(), String> {
         _ => false,
     };
     if allowed { Ok(()) } else { Err("You do not have permission to perform this action.".into()) }
+}
+
+fn valid_timeout(minutes: u32) -> bool { matches!(minutes, 1 | 2 | 5 | 10 | 15) }
+
+#[tauri::command]
+pub fn get_security_preferences(app: AppHandle, state: State<'_, SessionState>, token: String) -> Result<SecurityPreferences, String> {
+    let connection = database_connection(&app)?;
+    let current = actor(&connection, &state, &token)?;
+    let minutes = connection.query_row("SELECT inactivity_timeout_minutes FROM user_security_preferences WHERE user_id = ?", params![current.id], |row| row.get::<_, i64>(0)).optional().map_err(|error| format!("Unable to load security preferences: {error}"))?.unwrap_or(5);
+    Ok(SecurityPreferences { inactivity_timeout_minutes: minutes.clamp(1, 15) as u32 })
+}
+
+#[tauri::command]
+pub fn save_security_preferences(app: AppHandle, state: State<'_, SessionState>, token: String, inactivity_timeout_minutes: u32) -> Result<SecurityPreferences, String> {
+    if !valid_timeout(inactivity_timeout_minutes) { return Err("Choose one of the supported timeout values.".into()); }
+    let connection = database_connection(&app)?;
+    let current = actor(&connection, &state, &token)?;
+    connection.execute("INSERT INTO user_security_preferences (user_id, inactivity_timeout_minutes, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET inactivity_timeout_minutes = excluded.inactivity_timeout_minutes, updated_at = excluded.updated_at", params![current.id, inactivity_timeout_minutes, timestamp()]).map_err(|error| format!("Unable to save security preferences: {error}"))?;
+    audit(&connection, Some(&current.id), "security_preference_changed", "user_security_preferences", Some(&current.id), Some("inactivity_timeout_changed"))?;
+    Ok(SecurityPreferences { inactivity_timeout_minutes })
 }
 
 fn hash_password(password: &str) -> Result<String, String> {
@@ -193,8 +219,7 @@ pub fn setup_admin(app: AppHandle, state: State<'_, SessionState>, username: Str
     Ok(user_response(&connection, token, &id)?)
 }
 
-#[tauri::command]
-pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
+fn login_inner(app: AppHandle, state: &State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
     let connection = database_connection(&app)?;
     login_delay(&state, &username)?;
     let record = connection.query_row("SELECT u.id, u.password_hash FROM users u WHERE u.username = ? COLLATE NOCASE AND u.active = 1", params![username.trim()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional().map_err(|_| "Unable to authenticate.".to_string())?;
@@ -209,10 +234,34 @@ pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, p
 }
 
 #[tauri::command]
+pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
+    login_inner(app, &state, username, password)
+}
+
+#[tauri::command]
 pub fn logout(app: AppHandle, state: State<'_, SessionState>, token: String) -> Result<(), String> {
     let connection = database_connection(&app)?; let actor_id = state.active.lock().map_err(|_| "Session is unavailable.".to_string())?.as_ref().filter(|session| session.token == token).map(|session| session.user_id.clone());
     if let Some(id) = actor_id.as_deref() { audit(&connection, Some(id), "logout", "authentication", Some(id), None)?; }
     *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = None; Ok(())
+}
+
+#[tauri::command]
+pub fn lock_session(app: AppHandle, state: State<'_, SessionState>, token: String, reason: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+    let actor_id = state.active.lock().map_err(|_| "Session is unavailable.".to_string())?.as_ref().filter(|session| session.token == token).map(|session| session.user_id.clone());
+    let Some(id) = actor_id else { return Err("Authentication required.".into()); };
+    let action = if reason == "suspend" { "automatic_lock_suspend" } else { "automatic_lock_inactivity" };
+    audit(&connection, Some(&id), action, "authentication", Some(&id), None)?;
+    *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reauthenticate(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
+    let session = login_inner(app.clone(), &state, username, password)?;
+    let connection = database_connection(&app)?;
+    audit(&connection, Some(&session.id), "reauthentication_success", "authentication", Some(&session.id), None)?;
+    Ok(session)
 }
 
 #[tauri::command]
@@ -346,6 +395,16 @@ mod tests {
         assert!(valid_notification_id("NTF-123"));
         assert!(!valid_notification_id(""));
         assert!(!valid_notification_id("NTF 123"));
+    }
+
+    #[test]
+    fn inactivity_timeout_values_are_restricted_to_supported_choices() {
+        assert!(valid_timeout(1));
+        assert!(valid_timeout(5));
+        assert!(valid_timeout(15));
+        assert!(!valid_timeout(0));
+        assert!(!valid_timeout(3));
+        assert!(!valid_timeout(60));
     }
 
     #[test]
