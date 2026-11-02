@@ -22,6 +22,9 @@ export interface SessionUser {
   roleName: string
   departmentId: string
   departmentName: string
+  departmentRole: string
+  departmentRoleName: string
+  permissions: string[]
 }
 
 export interface AuditLogRecord { id: string; user_id: string | null; username: string | null; action: string; entity_type: string; entity_id: string | null; details: string | null; created_at: string }

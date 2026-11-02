@@ -43,5 +43,42 @@ button:disabled{cursor:not-allowed;opacity:.58}
 /* Phase 13 department selection portal */
 .portal-shell{min-height:100vh;background:radial-gradient(circle at 85% 0%,rgba(205,226,215,.75),transparent 34%),linear-gradient(135deg,#f5f8f5,#f8f1e5);color:var(--ink)}.portal-hero{padding:clamp(34px,7vw,78px) clamp(20px,7vw,100px) 38px;background:rgba(255,255,255,.72);border-bottom:1px solid rgba(35,75,65,.12)}.portal-brand{display:flex;align-items:center;gap:22px;max-width:1120px;margin:0 auto}.portal-brand img{width:92px;height:92px;object-fit:contain;filter:drop-shadow(0 12px 20px rgba(30,75,61,.13))}.portal-brand h1{margin:6px 0 4px;font-family:Georgia,serif;font-size:clamp(32px,5vw,58px);letter-spacing:-.04em}.portal-brand p{margin:0;color:var(--green);font-size:clamp(15px,2vw,19px)}.portal-intro{max-width:1120px;margin:25px auto 20px;color:#60736d;font-size:16px}.portal-search{display:flex;align-items:center;gap:10px;max-width:1120px;height:54px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 17px;box-shadow:0 12px 32px rgba(30,70,56,.07)}.portal-search span{font-size:24px;color:var(--green)}.portal-search input{width:100%;border:0;outline:0;background:transparent;color:var(--ink);font:inherit}.portal-content{max-width:1120px;margin:0 auto;padding:38px clamp(20px,7vw,100px) 70px}.portal-heading{display:flex;justify-content:space-between;align-items:end;gap:18px;margin-bottom:21px}.portal-heading h2{margin:6px 0 0;font-family:Georgia,serif;font-size:30px}.department-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.department-card{display:flex;align-items:center;gap:14px;min-height:142px;padding:18px;text-align:left;border:1px solid rgba(59,101,87,.15);border-radius:15px;background:linear-gradient(145deg,#fff,#f5faf6);color:var(--ink);box-shadow:0 10px 24px rgba(31,74,58,.06);cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}.department-card:hover,.department-card:focus-visible{transform:translateY(-3px);border-color:rgba(39,102,78,.42);box-shadow:0 17px 30px rgba(31,74,58,.13);outline:0}.department-icon{display:grid;place-items:center;flex:0 0 48px;width:48px;height:48px;border-radius:14px;background:#e0efe7;color:var(--green);font-size:26px}.department-card-body{display:flex;flex:1;flex-direction:column;gap:7px}.department-card-body strong{font-size:16px}.department-card-body span{color:#6a7b76;font-size:12px;line-height:1.45}.department-arrow{color:var(--green);font-size:20px}.portal-empty{padding:25px;border:1px dashed var(--line);border-radius:12px;color:var(--muted);text-align:center}.selected-department{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 18px;padding:11px 13px;border:1px solid #dbe8e0;border-radius:9px;background:#f3f9f5;color:var(--green);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.selected-department strong{font-size:13px;letter-spacing:0;text-transform:none}.auth-back-button{width:100%}@media(max-width:760px){.department-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.portal-heading{align-items:flex-start;flex-direction:column}.portal-heading .button{width:100%}}@media(max-width:520px){.portal-brand{align-items:flex-start;flex-direction:column;gap:12px}.portal-brand img{width:70px;height:70px}.department-grid{grid-template-columns:1fr}.department-card{min-height:112px}}
 .department-management .section-heading>.muted{max-width:720px;line-height:1.55}.department-create-form{display:grid;grid-template-columns:1fr 1.5fr auto;align-items:end;gap:12px;margin-top:22px;padding:18px;background:#f8fbf9;border:1px solid var(--line);border-radius:11px}.department-create-form label{display:flex;flex-direction:column;gap:7px;color:#687875;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.department-create-form input,.department-create-form textarea{width:100%;border:1px solid var(--line);border-radius:7px;padding:10px 12px;background:#fff;color:var(--ink);font:inherit;letter-spacing:normal;text-transform:none;resize:vertical}.department-active-check{flex-direction:row!important;align-items:center;white-space:nowrap}.department-active-check input{width:auto}.department-admin-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;margin-top:18px}.department-admin-grid .catalog-panel{margin-top:0}.department-admin-list{display:grid;gap:8px;margin-top:15px}.department-admin-row{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fff}.department-admin-row.selected{border-color:var(--green);box-shadow:0 0 0 2px rgba(43,104,79,.08)}.department-admin-select{display:flex;align-items:center;flex:1;gap:11px;min-width:0;padding:4px;text-align:left;background:transparent;color:var(--ink)}.department-admin-select>span:last-child{display:flex;flex-direction:column;gap:4px;min-width:0}.department-admin-select strong,.department-admin-select small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.department-admin-select small{color:var(--muted);font-size:11px}.department-admin-actions{display:flex;gap:4px}.department-admin-actions .button{padding:7px 9px;font-size:11px}.membership-list{display:grid;gap:7px;margin-top:16px}.membership-row{display:flex;align-items:center;gap:10px;padding:10px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}.membership-row:has(input:checked){border-color:#abd0bb;background:#f3faf5}.membership-row input{accent-color:var(--green)}.membership-row span{display:flex;flex-direction:column;gap:3px}.membership-row strong{font-size:13px}.membership-row small{color:var(--muted);font-size:11px}
+.membership-row select{margin-left:auto;max-width:190px;border:1px solid var(--line);border-radius:7px;padding:7px 9px;background:#fff;color:var(--ink);font:inherit;font-size:12px}
 @media(max-width:900px){.department-create-form{grid-template-columns:1fr 1fr}.department-create-form .form-actions{grid-column:1/-1}.department-admin-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.department-create-form{grid-template-columns:1fr}.department-create-form .form-actions{grid-column:auto}.department-admin-row{align-items:flex-start;flex-direction:column}.department-admin-actions{width:100%}.department-admin-actions .button{flex:1}}
+
+/* Department management layout: keep both panels inside their grid tracks. */
+.department-management{width:100%;max-width:none;min-width:0;box-sizing:border-box}
+.department-management *{box-sizing:border-box}
+.department-management .section-heading,.department-management .section-heading>div{min-width:0}
+.department-admin-grid{width:100%;min-width:0;align-items:start}
+.department-admin-grid>.department-panel{width:100%;min-width:0;margin-top:0;overflow:hidden}
+.department-admin-list,.membership-list{min-width:0;max-height:min(52vh,520px);overflow-x:hidden;overflow-y:auto;padding-right:4px}
+.department-admin-row{min-width:0;flex-wrap:wrap;align-items:flex-start}
+.department-admin-select{flex:1 1 220px;min-width:0;overflow:hidden}
+.department-admin-select>span:last-child{flex:1;overflow:hidden}
+.department-admin-select strong,.department-admin-select small{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.department-admin-select strong{line-height:1.3}
+.department-admin-select small{line-height:1.45}
+.department-admin-actions{flex:0 0 auto;align-items:center;flex-wrap:wrap;margin-left:auto}
+.department-admin-actions .button{white-space:nowrap}
+.membership-row{min-width:0;align-items:flex-start}
+.membership-row>span{flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.membership-row strong,.membership-row small{overflow-wrap:anywhere;word-break:break-word}
+.membership-row select{flex:0 1 190px;width:100%;min-width:0;margin-left:auto}
+
+@media(max-width:900px){
+  .department-admin-grid{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:560px){
+  .department-management{margin-top:24px}
+  .department-management .catalog-panel{padding:16px}
+  .department-admin-list,.membership-list{max-height:none;padding-right:0}
+  .department-admin-row{flex-direction:column}
+  .department-admin-select{width:100%;flex-basis:auto}
+  .department-admin-actions{width:100%;margin-left:0}
+  .department-admin-actions .button{flex:1 1 0}
+  .membership-row{flex-wrap:wrap;align-items:center}
+  .membership-row>span{flex-basis:calc(100% - 34px)}
+  .membership-row select{flex:1 1 100%;max-width:none;margin:3px 0 0 34px}
+}

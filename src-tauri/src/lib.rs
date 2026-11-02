@@ -434,6 +434,7 @@ pub fn run() {
         },
         Migration { version: 10, description: "add_security_preferences", sql: include_str!("../migrations/0010_add_security_preferences.sql"), kind: MigrationKind::Up },
         Migration { version: 11, description: "add_departments", sql: include_str!("../migrations/0011_add_departments.sql"), kind: MigrationKind::Up },
+        Migration { version: 12, description: "add_department_roles", sql: include_str!("../migrations/0012_add_department_roles.sql"), kind: MigrationKind::Up },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -464,10 +465,12 @@ pub fn run() {
             security::list_departments,
             security::select_department,
             department_commands::list_all_departments,
+            department_commands::list_manageable_departments,
             department_commands::create_department,
             department_commands::update_department,
             department_commands::set_department_active,
             department_commands::list_department_members,
+            department_commands::list_department_users,
             department_commands::set_department_membership,
             security::setup_admin,
             security::login,

@@ -28,6 +28,9 @@ pub struct SessionUser {
     pub role_name: String,
     pub department_id: String,
     pub department_name: String,
+    pub department_role: String,
+    pub department_role_name: String,
+    pub permissions: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -51,6 +54,8 @@ pub struct SecurityPreferences {
 pub struct Actor {
     pub id: String,
     pub role: String,
+    pub department_id: String,
+    pub department_role: String,
 }
 
 #[derive(Serialize)]
@@ -107,6 +112,25 @@ pub fn database_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     app.path().app_config_dir().map(|path| path.join("database").join("documents.db")).map_err(|error| error.to_string())
 }
 
+/// Ensures the Phase 14 role schema exists after restoring a backup created
+/// before migration 0012. Normal startup still applies the registered SQL
+/// migration; this guard is needed because restore happens in an already-open
+/// process and the migration plugin is not rerun automatically.
+pub fn ensure_department_role_schema(connection: &mut Connection) -> Result<(), String> {
+    let memberships_exists: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'department_memberships'", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+    if memberships_exists == 0 { return Ok(()); }
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS department_roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL); INSERT OR IGNORE INTO department_roles (id, name, description) VALUES ('department_manager', 'Department Manager', 'Manage documents and memberships within assigned departments.'), ('department_contributor', 'Department Contributor', 'Create and edit permitted department documents.'), ('department_viewer', 'Department Viewer', 'View, search, and open permitted department documents.');").map_err(|error| format!("Unable to initialize department roles: {error}"))?;
+    let has_role_column: i64 = connection.query_row("SELECT COUNT(*) FROM pragma_table_info('department_memberships') WHERE name = 'role_id'", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+    if has_role_column == 0 {
+        let transaction = connection.transaction().map_err(|error| format!("Unable to begin department role upgrade: {error}"))?;
+        transaction.execute_batch("CREATE TABLE department_memberships_new (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE, role_id TEXT NOT NULL REFERENCES department_roles(id), active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, department_id)); INSERT INTO department_memberships_new (user_id, department_id, role_id, active, created_at, updated_at) SELECT dm.user_id, dm.department_id, CASE WHEN EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = dm.user_id AND ur.role_id IN ('admin', 'manager')) THEN 'department_manager' WHEN EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = dm.user_id AND ur.role_id = 'contributor') THEN 'department_contributor' ELSE 'department_viewer' END, dm.active, dm.created_at, dm.updated_at FROM department_memberships dm; DROP TABLE department_memberships; ALTER TABLE department_memberships_new RENAME TO department_memberships; CREATE INDEX IF NOT EXISTS idx_department_memberships_department ON department_memberships(department_id, active); CREATE INDEX IF NOT EXISTS idx_department_memberships_user ON department_memberships(user_id, active); CREATE INDEX IF NOT EXISTS idx_department_memberships_role ON department_memberships(role_id, active);").map_err(|error| format!("Unable to upgrade department memberships: {error}"))?;
+        transaction.commit().map_err(|error| format!("Unable to commit department role upgrade: {error}"))?;
+    } else {
+        connection.execute_batch("UPDATE department_memberships SET role_id = 'department_viewer' WHERE role_id IS NULL OR NOT EXISTS (SELECT 1 FROM department_roles dr WHERE dr.id = department_memberships.role_id); CREATE INDEX IF NOT EXISTS idx_department_memberships_role ON department_memberships(role_id, active);").map_err(|error| format!("Unable to finalize department role schema: {error}"))?;
+    }
+    Ok(())
+}
+
 pub fn timestamp() -> String { chrono_like_now() }
 fn chrono_like_now() -> String {
     // Keep timestamps in the same UTC ISO-8601 shape as the existing frontend.
@@ -141,17 +165,25 @@ pub fn actor(connection: &Connection, state: &State<'_, SessionState>, token: &s
     let binding = state.active.lock().map_err(|_| "Session is unavailable.".to_string())?;
     let session = binding.as_ref().filter(|session| session.token == token).ok_or_else(|| "Authentication required.".to_string())?;
     let user_id = session.user_id.clone();
-    connection.query_row("SELECT u.id, r.id FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ? AND u.active = 1", params![user_id], |row| Ok(Actor { id: row.get(0)?, role: row.get(1)? })).map_err(|_| "Authentication required.".into())
+    let department_id = session.department_id.clone();
+    let result = connection.query_row("SELECT u.id, r.id, d.id, CASE WHEN r.id = 'admin' THEN 'administrator' ELSE COALESCE(dr.id, '') END FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id JOIN departments d ON d.id = ? LEFT JOIN department_memberships dm ON dm.user_id = u.id AND dm.department_id = d.id AND dm.active = 1 LEFT JOIN department_roles dr ON dr.id = dm.role_id WHERE u.id = ? AND u.active = 1 AND d.active = 1 AND (r.id = 'admin' OR dr.id IS NOT NULL)", params![department_id, user_id], |row| Ok(Actor { id: row.get(0)?, role: row.get(1)?, department_id: row.get(2)?, department_role: row.get(3)? }));
+    match result {
+        Ok(actor) => Ok(actor),
+        Err(_) => { let _ = audit(connection, Some(&user_id), "permission_denied", "department", Some(&department_id), Some("inactive_or_missing_membership")); Err("Authentication required or department access is no longer available.".into()) }
+    }
 }
 
 pub fn require(actor: &Actor, permission: &str) -> Result<(), String> {
-    let allowed = match permission {
-        "view" | "open" => matches!(actor.role.as_str(), "admin" | "manager" | "contributor" | "viewer"),
-        "create" | "update" => matches!(actor.role.as_str(), "admin" | "manager" | "contributor"),
-        "archive" | "restore" => matches!(actor.role.as_str(), "admin" | "manager"),
-        "delete" => matches!(actor.role.as_str(), "admin" | "manager"),
-        "admin" | "audit" => actor.role == "admin",
-        _ => false,
+    let allowed = if actor.role == "admin" {
+        matches!(permission, "view" | "open" | "create" | "update" | "archive" | "restore" | "delete" | "admin" | "audit" | "membership")
+    } else {
+        match permission {
+            "view" | "open" => matches!(actor.department_role.as_str(), "department_manager" | "department_contributor" | "department_viewer"),
+            "create" | "update" => matches!(actor.department_role.as_str(), "department_manager" | "department_contributor"),
+            "archive" | "restore" | "delete" | "membership" => actor.department_role == "department_manager",
+            "admin" | "audit" => false,
+            _ => false,
+        }
     };
     if allowed { Ok(()) } else { Err("You do not have permission to perform this action.".into()) }
 }
@@ -210,12 +242,27 @@ fn clear_login_failures(state: &State<'_, SessionState>, username: &str) {
     if let Ok(mut failures) = state.login_failures.lock() { failures.remove(&login_key(username)); }
 }
 
+fn permissions(global_role: &str, department_role: &str) -> Vec<String> {
+    if global_role == "admin" { return ["view", "open", "create", "update", "archive", "restore", "delete", "membership", "admin", "audit"].into_iter().map(str::to_string).collect(); }
+    match department_role {
+        "department_manager" => ["view", "open", "create", "update", "archive", "restore", "delete", "membership"].into_iter().map(str::to_string).collect(),
+        "department_contributor" => ["view", "open", "create", "update"].into_iter().map(str::to_string).collect(),
+        _ => ["view", "open"].into_iter().map(str::to_string).collect(),
+    }
+}
+
+fn department_context(connection: &Connection, user_id: &str, department_id: &str) -> Result<(String, String, String), String> {
+    connection.query_row("SELECT d.name, r.id, CASE WHEN r.id = 'admin' THEN 'administrator' ELSE COALESCE(dr.id, '') END FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id JOIN departments d ON d.id = ? LEFT JOIN department_memberships dm ON dm.user_id = u.id AND dm.department_id = d.id AND dm.active = 1 LEFT JOIN department_roles dr ON dr.id = dm.role_id WHERE u.id = ? AND u.active = 1 AND d.active = 1 AND (r.id = 'admin' OR dr.id IS NOT NULL)", params![department_id.trim(), user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|_| "You are not an active member of the selected department.".into())
+}
+
 fn user_response(connection: &Connection, token: String, id: &str, department_id: &str) -> Result<SessionUser, String> {
-    connection.query_row("SELECT u.id, u.username, u.display_name, r.id, r.name, d.id, d.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id JOIN departments d ON d.id = ? WHERE u.id = ?", params![department_id, id], |row| Ok(SessionUser { token, id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, role: row.get(3)?, role_name: row.get(4)?, department_id: row.get(5)?, department_name: row.get(6)? })).map_err(|error| format!("Unable to load session user: {error}"))
+    let (department_name, role, department_role) = department_context(connection, id, department_id)?;
+    connection.query_row("SELECT u.id, u.username, u.display_name, r.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ?", params![id], |row| Ok(SessionUser { token, id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, role: role.clone(), role_name: row.get(3)?, department_id: department_id.to_string(), department_name: department_name.clone(), department_role: department_role.clone(), department_role_name: if department_role == "administrator" { "Administrator".into() } else { match department_role.as_str() { "department_manager" => "Department Manager", "department_contributor" => "Department Contributor", _ => "Department Viewer" }.into() }, permissions: permissions(&role, &department_role) })).map_err(|error| format!("Unable to load session user: {error}"))
 }
 
 fn department_access(connection: &Connection, user_id: &str, department_id: &str) -> Result<(String, String), String> {
-    connection.query_row("SELECT d.id, d.name FROM departments d JOIN department_memberships dm ON dm.department_id = d.id WHERE d.id = ? AND d.active = 1 AND dm.user_id = ? AND dm.active = 1", params![department_id.trim(), user_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| "You are not an active member of the selected department.".into())
+    let context = department_context(connection, user_id, department_id)?;
+    Ok((department_id.trim().to_string(), context.0))
 }
 
 #[tauri::command]
@@ -247,7 +294,7 @@ pub fn setup_admin(app: AppHandle, state: State<'_, SessionState>, username: Str
     connection.execute("INSERT INTO users (id, username, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", params![id, username, display_name, hash, timestamp, timestamp]).map_err(|error| format!("Unable to create administrator: {error}"))?;
     connection.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?, 'admin')", params![id]).map_err(|error| error.to_string())?;
     let department_id = "administration".to_string();
-    connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) SELECT ?, id, 1, ?, ? FROM departments", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+    connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, role_id, active, created_at, updated_at) SELECT ?, id, 'department_manager', 1, ?, ? FROM departments", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
     let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone(), department_id: department_id.clone() });
     audit(&connection, Some(&id), "user_created", "user", Some(&id), Some("Initial administrator account"))?;
     notify_best_effort(&connection, Some(&id), "user_created", "Administrator account created", "The initial administrator account was created.", Some("user"), Some(&id), "info");
@@ -321,10 +368,11 @@ pub fn create_user(app: AppHandle, state: State<'_, SessionState>, token: String
     let id = format!("USR-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()); let timestamp = timestamp(); let hash = hash_password(&password)?;
     connection.execute("INSERT INTO users (id, username, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", params![id, username.trim(), display_name.trim(), hash, timestamp, timestamp]).map_err(|error| format!("Unable to create user: {error}"))?;
     connection.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", params![id, role]).map_err(|error| error.to_string())?;
+    let department_role = match role.as_str() { "admin" | "manager" => "department_manager", "contributor" => "department_contributor", _ => "department_viewer" };
     if role == "admin" {
-        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) SELECT ?, id, 1, ?, ? FROM departments", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, role_id, active, created_at, updated_at) SELECT ?, id, ?, 1, ?, ? FROM departments", params![id, department_role, timestamp, timestamp]).map_err(|error| error.to_string())?;
     } else {
-        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) VALUES (?, 'administration', 1, ?, ?)", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, role_id, active, created_at, updated_at) VALUES (?, 'administration', ?, 1, ?, ?)", params![id, department_role, timestamp, timestamp]).map_err(|error| error.to_string())?;
     }
     audit(&connection, Some(&current.id), "user_created", "user", Some(&id), Some("Created by administrator"))?;
     notify_best_effort(&connection, Some(&current.id), "user_created", "User account created", "A new user account was created.", Some("user"), Some(&id), "info");
@@ -427,7 +475,10 @@ mod tests {
     use super::{notify_best_effort, require, valid_notification_id, valid_timeout, Actor};
     use rusqlite::Connection;
 
-    fn actor(role: &str) -> Actor { Actor { id: "test".into(), role: role.into() } }
+    fn actor(role: &str) -> Actor {
+        let department_role = match role { "admin" => "administrator", "manager" => "department_manager", "contributor" => "department_contributor", _ => "department_viewer" };
+        Actor { id: "test".into(), role: role.into(), department_id: "finance".into(), department_role: department_role.into() }
+    }
 
     #[test]
     fn role_permissions_match_phase_six_matrix() {
@@ -435,6 +486,37 @@ mod tests {
         for role in ["admin", "manager", "contributor"] { assert!(require(&actor(role), "create").is_ok()); assert!(require(&actor(role), "update").is_ok()); }
         for role in ["admin", "manager"] { assert!(require(&actor(role), "delete").is_ok()); }
         assert!(require(&actor("viewer"), "create").is_err()); assert!(require(&actor("contributor"), "delete").is_err()); assert!(require(&actor("manager"), "audit").is_err()); assert!(require(&actor("viewer"), "admin").is_err());
+    }
+
+    #[test]
+    fn department_permissions_match_phase_fourteen_matrix() {
+        let manager = actor("manager");
+        assert!(require(&manager, "view").is_ok());
+        assert!(require(&manager, "create").is_ok());
+        assert!(require(&manager, "update").is_ok());
+        assert!(require(&manager, "archive").is_ok());
+        assert!(require(&manager, "restore").is_ok());
+        assert!(require(&manager, "delete").is_ok());
+        assert!(require(&manager, "membership").is_ok());
+
+        let contributor = Actor { department_role: "department_contributor".into(), ..actor("viewer") };
+        assert!(require(&contributor, "view").is_ok());
+        assert!(require(&contributor, "create").is_ok());
+        assert!(require(&contributor, "update").is_ok());
+        assert!(require(&contributor, "archive").is_err());
+        assert!(require(&contributor, "delete").is_err());
+        assert!(require(&contributor, "membership").is_err());
+
+        let viewer = Actor { department_role: "department_viewer".into(), ..actor("viewer") };
+        assert!(require(&viewer, "view").is_ok());
+        assert!(require(&viewer, "open").is_ok());
+        assert!(require(&viewer, "create").is_err());
+        assert!(require(&viewer, "update").is_err());
+
+        let administrator = actor("admin");
+        assert!(require(&administrator, "admin").is_ok());
+        assert!(require(&administrator, "audit").is_ok());
+        assert!(require(&administrator, "membership").is_ok());
     }
 
     #[test]

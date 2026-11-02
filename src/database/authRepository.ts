@@ -17,4 +17,4 @@ export function changeUserRole(token: string, userId: string, role: RoleId): Pro
 export function deleteUser(token: string, userId: string): Promise<void> { return invoke('delete_user', { token, userId }) }
 export function changePassword(token: string, userId: string, password: string): Promise<void> { return invoke('change_password', { token, userId, password }) }
 
-export interface UserSession { token: string; id: string; username: string; displayName: string; role: RoleId; roleName: string; departmentId: string; departmentName: string }
+export interface UserSession { token: string; id: string; username: string; displayName: string; role: RoleId; roleName: string; departmentId: string; departmentName: string; departmentRole: string; departmentRoleName: string; permissions: string[] }

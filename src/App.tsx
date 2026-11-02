@@ -141,7 +141,10 @@ function App() {
   if (authState === 'locked' && lockedUser) return <LockScreen user={lockedUser} onUnlock={account => { setLockedUser(null); setUser(account); setSelectedDepartment({ id: account.departmentId, name: account.departmentName, description: '', icon: '⌂', active: 1, sortOrder: 1 }); setAuthState('authenticated'); setNotice('Archive unlocked successfully.') }} />
   if (!user) return null
 
-  const canAdd = user.role !== 'viewer'
+  const canAdd = user.permissions.includes('create')
+  const canUpdate = user.permissions.includes('update')
+  const canArchive = user.permissions.includes('archive')
+  const canDelete = user.permissions.includes('delete')
   const canManageUsers = user.role === 'admin'
   const go = (next: View, keepNotice = false) => { if (!keepNotice) setNotice(''); setError(''); setSelected(null); setPage(0); setView(next) }
   const saveNew = async (values: DocumentFormValues, file?: SelectedFile) => {
@@ -242,12 +245,12 @@ function App() {
     <button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>
     {canManageUsers && <><button className={`nav-item ${view === 'organization' ? 'active' : ''}`} onClick={() => go('organization')}><span>⌘</span>Categories & tags</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}
     <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Security</button>
-  </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setSelectedDepartment(null); setAuthState('portal'); setView('dashboard') }}>Sign out</button></div></aside>
+  </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.departmentRoleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setSelectedDepartment(null); setAuthState('portal'); setView('dashboard') }}>Sign out</button></div></aside>
     <main className="main-content"><header className="topbar"><div><span className="eyebrow">አገልግሎታችንን ቅድስት ሥላሴ ይባርኩልን😇</span><h1>{heading}</h1></div><div className="topbar-actions">{canManageUsers && <NotificationCenter token={user.token} refreshKey={notificationRefreshKey} />}{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</div></header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
       {view === 'add' && <DocumentForm categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => go('documents')} onSave={saveNew} />}
       {view === 'edit' && selected && <DocumentForm initial={selected} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => setView('details')} onSave={saveEdit} />}
-      {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}
-      {view === 'settings' && <><SecurityPreferences token={user.token} />{canManageUsers && <><UserManagement token={user.token} currentUserId={user.id} /><DepartmentManagement token={user.token} /></>}</>}
+      {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canUpdate ? () => setView('edit') : undefined} onArchive={canArchive ? () => void archive() : undefined} onDelete={canDelete ? () => void remove() : undefined} />}
+      {view === 'settings' && <><SecurityPreferences token={user.token} />{canManageUsers && <UserManagement token={user.token} currentUserId={user.id} />}{(canManageUsers || user.departmentRole === 'department_manager') && <DepartmentManagement token={user.token} globalRole={user.role} currentUserId={user.id} />}</>}
       {view === 'organization' && canManageUsers && <OrganizationManagement token={user.token} onChanged={() => void refreshAfterOrganizationChange()} />}
       {view === 'audit' && canManageUsers && <AuditLog token={user.token} />}
       {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setSelectedDepartment(null); setAuthState('portal'); setView('dashboard') }} />}
