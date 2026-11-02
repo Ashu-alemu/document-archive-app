@@ -14,6 +14,7 @@ pub struct SessionState {
 pub struct Session {
     pub token: String,
     pub user_id: String,
+    pub department_id: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -25,6 +26,19 @@ pub struct SessionUser {
     pub display_name: String,
     pub role: String,
     pub role_name: String,
+    pub department_id: String,
+    pub department_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Department {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub active: i64,
+    pub sort_order: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -196,8 +210,27 @@ fn clear_login_failures(state: &State<'_, SessionState>, username: &str) {
     if let Ok(mut failures) = state.login_failures.lock() { failures.remove(&login_key(username)); }
 }
 
-fn user_response(connection: &Connection, token: String, id: &str) -> Result<SessionUser, String> {
-    connection.query_row("SELECT u.id, u.username, u.display_name, r.id, r.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id WHERE u.id = ?", params![id], |row| Ok(SessionUser { token, id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, role: row.get(3)?, role_name: row.get(4)? })).map_err(|error| format!("Unable to load session user: {error}"))
+fn user_response(connection: &Connection, token: String, id: &str, department_id: &str) -> Result<SessionUser, String> {
+    connection.query_row("SELECT u.id, u.username, u.display_name, r.id, r.name, d.id, d.name FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id JOIN departments d ON d.id = ? WHERE u.id = ?", params![department_id, id], |row| Ok(SessionUser { token, id: row.get(0)?, username: row.get(1)?, display_name: row.get(2)?, role: row.get(3)?, role_name: row.get(4)?, department_id: row.get(5)?, department_name: row.get(6)? })).map_err(|error| format!("Unable to load session user: {error}"))
+}
+
+fn department_access(connection: &Connection, user_id: &str, department_id: &str) -> Result<(String, String), String> {
+    connection.query_row("SELECT d.id, d.name FROM departments d JOIN department_memberships dm ON dm.department_id = d.id WHERE d.id = ? AND d.active = 1 AND dm.user_id = ? AND dm.active = 1", params![department_id.trim(), user_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| "You are not an active member of the selected department.".into())
+}
+
+#[tauri::command]
+pub fn list_departments(app: AppHandle) -> Result<Vec<Department>, String> {
+    let connection = database_connection(&app)?;
+    let mut statement = connection.prepare("SELECT id, name, description, icon, active, sort_order FROM departments WHERE active = 1 ORDER BY sort_order, name COLLATE NOCASE").map_err(|error| format!("Unable to load departments: {error}"))?;
+    let rows = statement.query_map([], |row| Ok(Department { id: row.get(0)?, name: row.get(1)?, description: row.get(2)?, icon: row.get(3)?, active: row.get(4)?, sort_order: row.get(5)? })).map_err(|error| format!("Unable to load departments: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| format!("Unable to load departments: {error}"))
+}
+
+#[tauri::command]
+pub fn select_department(app: AppHandle, department_id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+    let department = connection.query_row("SELECT name FROM departments WHERE id = ? AND active = 1", params![department_id.trim()], |row| row.get::<_, String>(0)).map_err(|_| "That department is not available.".to_string())?;
+    audit(&connection, None, "department_selected", "department", Some(department_id.trim()), Some(&department))
 }
 
 #[tauri::command]
@@ -213,35 +246,44 @@ pub fn setup_admin(app: AppHandle, state: State<'_, SessionState>, username: Str
     let id = format!("USR-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()); let timestamp = timestamp(); let hash = hash_password(&password)?;
     connection.execute("INSERT INTO users (id, username, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", params![id, username, display_name, hash, timestamp, timestamp]).map_err(|error| format!("Unable to create administrator: {error}"))?;
     connection.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?, 'admin')", params![id]).map_err(|error| error.to_string())?;
-    let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone() });
+    let department_id = "administration".to_string();
+    connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) SELECT ?, id, 1, ?, ? FROM departments", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+    let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone(), department_id: department_id.clone() });
     audit(&connection, Some(&id), "user_created", "user", Some(&id), Some("Initial administrator account"))?;
     notify_best_effort(&connection, Some(&id), "user_created", "Administrator account created", "The initial administrator account was created.", Some("user"), Some(&id), "info");
-    Ok(user_response(&connection, token, &id)?)
+    Ok(user_response(&connection, token, &id, &department_id)?)
 }
 
-fn login_inner(app: AppHandle, state: &State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
+fn login_inner(app: AppHandle, state: &State<'_, SessionState>, username: String, password: String, department_id: String) -> Result<SessionUser, String> {
     let connection = database_connection(&app)?;
     login_delay(&state, &username)?;
     let record = connection.query_row("SELECT u.id, u.password_hash FROM users u WHERE u.username = ? COLLATE NOCASE AND u.active = 1", params![username.trim()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional().map_err(|_| "Unable to authenticate.".to_string())?;
     let Some((id, hash)) = record else { let failures = record_login_failure(&state, &username); audit(&connection, None, "login_failure", "authentication", None, Some("invalid_credentials"))?; if failures == 3 { notify_best_effort(&connection, None, "repeated_login_failure", "Repeated sign-in failures", "Repeated failed sign-in attempts were detected.", Some("authentication"), None, "warning"); } return Err("Invalid username or password.".into()); };
     if !verify_password(&password, &hash) { let failures = record_login_failure(&state, &username); audit(&connection, None, "login_failure", "authentication", None, Some("invalid_credentials"))?; if failures == 3 { notify_best_effort(&connection, None, "repeated_login_failure", "Repeated sign-in failures", "Repeated failed sign-in attempts were detected.", Some("authentication"), None, "warning"); } return Err("Invalid username or password.".into()); }
     clear_login_failures(&state, &username);
+    let (department_id, department_name) = match department_access(&connection, &id, &department_id) {
+        Ok(access) => access,
+        Err(error) => {
+            audit(&connection, Some(&id), "department_access_denied", "department", Some(&department_id), Some("inactive_or_missing_membership"))?;
+            return Err(error);
+        }
+    };
     let timestamp = timestamp(); connection.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", params![timestamp, timestamp, id]).map_err(|error| error.to_string())?;
-    audit(&connection, Some(&id), "login_success", "authentication", Some(&id), None)?;
+    audit(&connection, Some(&id), "login_success", "authentication", Some(&id), Some(&format!("department={department_name}")))?;
     notify_best_effort(&connection, Some(&id), "login_success", "Successful sign-in", "A user signed in successfully.", Some("authentication"), Some(&id), "info");
-    let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone() });
-    user_response(&connection, token, &id)
+    let token = uuid::Uuid::new_v4().to_string(); *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = Some(Session { token: token.clone(), user_id: id.clone(), department_id: department_id.clone() });
+    user_response(&connection, token, &id, &department_id)
 }
 
 #[tauri::command]
-pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
-    login_inner(app, &state, username, password)
+pub fn login(app: AppHandle, state: State<'_, SessionState>, username: String, password: String, department_id: String) -> Result<SessionUser, String> {
+    login_inner(app, &state, username, password, department_id)
 }
 
 #[tauri::command]
 pub fn logout(app: AppHandle, state: State<'_, SessionState>, token: String) -> Result<(), String> {
-    let connection = database_connection(&app)?; let actor_id = state.active.lock().map_err(|_| "Session is unavailable.".to_string())?.as_ref().filter(|session| session.token == token).map(|session| session.user_id.clone());
-    if let Some(id) = actor_id.as_deref() { audit(&connection, Some(id), "logout", "authentication", Some(id), None)?; }
+    let connection = database_connection(&app)?; let actor = state.active.lock().map_err(|_| "Session is unavailable.".to_string())?.as_ref().filter(|session| session.token == token).map(|session| (session.user_id.clone(), session.department_id.clone()));
+    if let Some((id, department_id)) = actor { audit(&connection, Some(&id), "logout", "authentication", Some(&id), Some(&format!("department={department_id}")))?; }
     *state.active.lock().map_err(|_| "Session is unavailable.".to_string())? = None; Ok(())
 }
 
@@ -257,8 +299,8 @@ pub fn lock_session(app: AppHandle, state: State<'_, SessionState>, token: Strin
 }
 
 #[tauri::command]
-pub fn reauthenticate(app: AppHandle, state: State<'_, SessionState>, username: String, password: String) -> Result<SessionUser, String> {
-    let session = login_inner(app.clone(), &state, username, password)?;
+pub fn reauthenticate(app: AppHandle, state: State<'_, SessionState>, username: String, password: String, department_id: String) -> Result<SessionUser, String> {
+    let session = login_inner(app.clone(), &state, username, password, department_id)?;
     let connection = database_connection(&app)?;
     audit(&connection, Some(&session.id), "reauthentication_success", "authentication", Some(&session.id), None)?;
     Ok(session)
@@ -279,6 +321,11 @@ pub fn create_user(app: AppHandle, state: State<'_, SessionState>, token: String
     let id = format!("USR-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()); let timestamp = timestamp(); let hash = hash_password(&password)?;
     connection.execute("INSERT INTO users (id, username, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", params![id, username.trim(), display_name.trim(), hash, timestamp, timestamp]).map_err(|error| format!("Unable to create user: {error}"))?;
     connection.execute("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", params![id, role]).map_err(|error| error.to_string())?;
+    if role == "admin" {
+        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) SELECT ?, id, 1, ?, ? FROM departments", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+    } else {
+        connection.execute("INSERT OR IGNORE INTO department_memberships (user_id, department_id, active, created_at, updated_at) VALUES (?, 'administration', 1, ?, ?)", params![id, timestamp, timestamp]).map_err(|error| error.to_string())?;
+    }
     audit(&connection, Some(&current.id), "user_created", "user", Some(&id), Some("Created by administrator"))?;
     notify_best_effort(&connection, Some(&current.id), "user_created", "User account created", "A new user account was created.", Some("user"), Some(&id), "info");
     Ok(())
@@ -377,7 +424,7 @@ pub fn get_audit_logs(app: AppHandle, state: State<'_, SessionState>, token: Str
 
 #[cfg(test)]
 mod tests {
-    use super::{notify_best_effort, require, valid_notification_id, Actor};
+    use super::{notify_best_effort, require, valid_notification_id, valid_timeout, Actor};
     use rusqlite::Connection;
 
     fn actor(role: &str) -> Actor { Actor { id: "test".into(), role: role.into() } }

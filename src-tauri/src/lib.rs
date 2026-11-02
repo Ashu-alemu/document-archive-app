@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod document_commands;
+mod department_commands;
 mod organization_commands;
 mod backup_commands;
 mod security;
@@ -432,6 +433,7 @@ pub fn run() {
             kind: MigrationKind::Up,
         },
         Migration { version: 10, description: "add_security_preferences", sql: include_str!("../migrations/0010_add_security_preferences.sql"), kind: MigrationKind::Up },
+        Migration { version: 11, description: "add_departments", sql: include_str!("../migrations/0011_add_departments.sql"), kind: MigrationKind::Up },
     ];
     tauri::Builder::default()
         .manage(SessionState::default())
@@ -459,6 +461,14 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             security::auth_status,
+            security::list_departments,
+            security::select_department,
+            department_commands::list_all_departments,
+            department_commands::create_department,
+            department_commands::update_department,
+            department_commands::set_department_active,
+            department_commands::list_department_members,
+            department_commands::set_department_membership,
             security::setup_admin,
             security::login,
             security::logout,

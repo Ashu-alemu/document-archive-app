@@ -16,6 +16,9 @@ import { NotificationCenter } from './components/NotificationCenter'
 import { hasUsers, logout } from './services/authService'
 import { getSecurityPreferences, lockSession } from './database/authRepository'
 import type { SessionUser } from './types/auth'
+import { DepartmentPortal } from './components/DepartmentPortal'
+import { DepartmentManagement } from './components/DepartmentManagement'
+import type { Department } from './types/department'
 
 type View = 'dashboard' | 'documents' | 'favorites' | 'add' | 'archived' | 'settings' | 'organization' | 'audit' | 'backup' | 'details' | 'edit'
 const isDesktop = () => '__TAURI_INTERNALS__' in window
@@ -26,9 +29,10 @@ const EMPTY_FILTERS: DocumentSearchFilters = {
 }
 
 function App() {
-  const [authState, setAuthState] = useState<'loading' | 'setup' | 'login' | 'authenticated' | 'locked'>('loading')
+  const [authState, setAuthState] = useState<'loading' | 'portal' | 'setup' | 'login' | 'authenticated' | 'locked'>('loading')
   const [user, setUser] = useState<SessionUser | null>(null)
-  const [lockedUser, setLockedUser] = useState<Pick<SessionUser, 'displayName' | 'username'> | null>(null)
+  const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
+  const [lockedUser, setLockedUser] = useState<Pick<SessionUser, 'displayName' | 'username' | 'departmentId' | 'departmentName'> | null>(null)
   const [timeoutMinutes, setTimeoutMinutes] = useState(5)
   const [view, setView] = useState<View>('dashboard')
   const [results, setResults] = useState<DocumentSearchResults>({ documents: [], total: 0 })
@@ -48,11 +52,11 @@ function App() {
   const timeoutHandle = useRef<number | undefined>(undefined)
 
   // oxlint-disable-next-line react(set-state-in-effect)
-  useEffect(() => { void hasUsers().then(exists => setAuthState(exists ? 'login' : 'setup')).catch(() => setAuthState('login')) }, [])
+  useEffect(() => { void hasUsers().then(() => setAuthState('portal')).catch(() => setAuthState('portal')) }, [])
 
   const lock = useCallback(async (reason: 'inactivity' | 'suspend') => {
     if (!user || authState !== 'authenticated') return
-    const identity = { displayName: user.displayName, username: user.username }
+    const identity = { displayName: user.displayName, username: user.username, departmentId: user.departmentId, departmentName: user.departmentName }
     try { await lockSession(user.token, reason) } catch (error) { if (reason === 'inactivity') setError(error instanceof Error ? error.message : 'Unable to lock the archive.'); return }
     setLockedUser(identity); setUser(null); setAuthState('locked'); setSelected(null); setResults({ documents: [], total: 0 }); setRecentDocuments([]); setCategories([]); setTags([]); setView('dashboard')
   }, [authState, user])
@@ -131,9 +135,10 @@ function App() {
   useEffect(() => { void loadDocuments() }, [loadDocuments])
 
   if (authState === 'loading') return <main className="auth-shell"><p>Opening local archive…</p></main>
+  if (authState === 'portal') return <DepartmentPortal onSelect={department => { setSelectedDepartment(department); void hasUsers().then(exists => setAuthState(exists ? 'login' : 'setup')) }} onAdministrator={() => { setSelectedDepartment({ id: 'administration', name: 'Administration', description: '', icon: '⌂', active: 1, sortOrder: 1 }); void hasUsers().then(exists => setAuthState(exists ? 'login' : 'setup')) }} />
   if (authState === 'setup') return <SetupScreen onComplete={account => { setUser(account); setAuthState('authenticated') }} />
-  if (authState === 'login') return <LoginScreen onLogin={account => { setUser(account); setAuthState('authenticated') }} />
-  if (authState === 'locked' && lockedUser) return <LockScreen user={lockedUser} onUnlock={account => { setLockedUser(null); setUser(account); setAuthState('authenticated'); setNotice('Archive unlocked successfully.') }} />
+  if (authState === 'login' && selectedDepartment) return <LoginScreen department={selectedDepartment} onBack={() => { setSelectedDepartment(null); setAuthState('portal') }} onLogin={account => { setUser(account); setAuthState('authenticated') }} />
+  if (authState === 'locked' && lockedUser) return <LockScreen user={lockedUser} onUnlock={account => { setLockedUser(null); setUser(account); setSelectedDepartment({ id: account.departmentId, name: account.departmentName, description: '', icon: '⌂', active: 1, sortOrder: 1 }); setAuthState('authenticated'); setNotice('Archive unlocked successfully.') }} />
   if (!user) return null
 
   const canAdd = user.role !== 'viewer'
@@ -237,15 +242,15 @@ function App() {
     <button className={`nav-item ${view === 'archived' ? 'active' : ''}`} onClick={() => go('archived')}><span>◫</span>Archived</button>
     {canManageUsers && <><button className={`nav-item ${view === 'organization' ? 'active' : ''}`} onClick={() => go('organization')}><span>⌘</span>Categories & tags</button><button className={`nav-item ${view === 'audit' ? 'active' : ''}`} onClick={() => go('audit')}><span>☷</span>Audit logs</button><button className={`nav-item ${view === 'backup' ? 'active' : ''}`} onClick={() => go('backup')}><span>⬡</span>Backup & restore</button></>}
     <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => go('settings')}><span>⚙</span>Security</button>
-  </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setAuthState('login'); setView('dashboard') }}>Sign out</button></div></aside>
+  </nav><div className="sidebar-footer"><span className="status-dot ready" /><span>{user.displayName} · {user.roleName}</span><button className="logout-button" onClick={() => { void logout(user.token); setUser(null); setSelectedDepartment(null); setAuthState('portal'); setView('dashboard') }}>Sign out</button></div></aside>
     <main className="main-content"><header className="topbar"><div><span className="eyebrow">አገልግሎታችንን ቅድስት ሥላሴ ይባርኩልን😇</span><h1>{heading}</h1></div><div className="topbar-actions">{canManageUsers && <NotificationCenter token={user.token} refreshKey={notificationRefreshKey} />}{canAdd && !['add', 'settings', 'organization', 'audit', 'edit'].includes(view) && <button className="button primary" onClick={() => go('add')}>+ Add document</button>}</div></header>{notice && <div className="notice" role="status">✓ {notice}</div>}{error && <div className="form-error" role="alert">{error}</div>}
       {view === 'add' && <DocumentForm categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => go('documents')} onSave={saveNew} />}
       {view === 'edit' && selected && <DocumentForm initial={selected} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onCancel={() => setView('details')} onSave={saveEdit} />}
       {view === 'details' && selected && <DocumentDetails document={selected} busy={Boolean(actionBusy)} onBack={() => go('documents')} onOpen={() => void open(selected)} onToggleFavorite={() => void toggleFavorite(selected)} onEdit={canAdd ? () => setView('edit') : undefined} onArchive={canAdd ? () => void archive() : undefined} onDelete={user.role === 'admin' || user.role === 'manager' ? () => void remove() : undefined} />}
-      {view === 'settings' && <><SecurityPreferences token={user.token} />{canManageUsers && <UserManagement token={user.token} currentUserId={user.id} />}</>}
+      {view === 'settings' && <><SecurityPreferences token={user.token} />{canManageUsers && <><UserManagement token={user.token} currentUserId={user.id} /><DepartmentManagement token={user.token} /></>}</>}
       {view === 'organization' && canManageUsers && <OrganizationManagement token={user.token} onChanged={() => void refreshAfterOrganizationChange()} />}
       {view === 'audit' && canManageUsers && <AuditLog token={user.token} />}
-      {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setAuthState('login'); setView('dashboard') }} />}
+      {view === 'backup' && canManageUsers && <BackupScreen token={user.token} onRestored={() => { setUser(null); setSelectedDepartment(null); setAuthState('portal'); setView('dashboard') }} />}
       {view === 'dashboard' && <><section className="welcome-card"><div><span className="card-kicker">የህንፃ አሰሪ ኮሚቴ</span><h2>የጎተራ 44 ፀበል ፈለገ ዮርዳኖስ ቅድስት ሥላሴ  ወቅድስት አርሴማ ቤተክርስቲያን የህንፃ አሰሪ ኮሚቴ✨</h2><p>”የሚያገለግልም ቢሆን እግዚአብሔር በሚሰጠኝ ሀይል ነው ብሎ ያገልግል” 1ጴጥ 4፡11</p></div><div className="welcome-icon"><img src="/images/document-archive-logo.png" alt="Church logo" /></div></section><section className="stats-grid"><article className="stat-card"><span className="stat-label">Active documents-በስራ ላይ ያሉ ፉይሎች</span><strong>{results.total}</strong><span className="muted">Across your local archive</span></article><article className="stat-card"><span className="stat-label">Storage</span><strong>Local</strong><span className="muted">Files remain on this device</span></article><article className="stat-card"><span className="stat-label">Search</span><strong>Ready</strong><span className="muted">Search metadata and OCR text</span></article></section>      <section className="recent-section"><div className="section-heading"><div><span className="eyebrow">Archive activity</span><h2>Recent documents</h2></div><button type="button" className="button ghost" onClick={() => go('documents')}>Browse all</button></div><DocumentList loading={loadingDocuments} busy={Boolean(actionBusy)} emptyTitle="No documents yet" emptyDescription="Add your first document to start building the archive." documents={recentDocuments.length ? recentDocuments : selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} /></section></>}
       {(view === 'documents' || view === 'favorites' || view === 'archived') && <><SearchBar filters={filters} categories={categories.map(({ name }) => name)} tags={tags.map(({ name }) => name)} onChange={updateFilters} /><p className="result-count" role="status" aria-live="polite">{loadingDocuments ? 'Searching local archive…' : `${results.total} ${results.total === 1 ? 'document' : 'documents'} found`}</p><DocumentList loading={loadingDocuments} busy={Boolean(actionBusy)} documents={selectedDocuments} onSelect={(document) => { setSelected(document); setView('details') }} onOpen={(document) => void open(document)} onToggleFavorite={(document) => void toggleFavorite(document)} />{totalPages > 1 && <div className="audit-pagination"><button type="button" className="button secondary" disabled={page === 0 || loadingDocuments} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page + 1} of {totalPages}</span><button type="button" className="button secondary" disabled={page + 1 >= totalPages || loadingDocuments} onClick={() => setPage(page + 1)}>Next</button></div>}</>}
     </main></div>
