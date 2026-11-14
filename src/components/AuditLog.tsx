@@ -2,7 +2,7 @@ import { useEffect, useState, type ChangeEvent } from 'react'
 import { findAuditLogs } from '../database/auditRepository'
 import type { AuditLogRecord } from '../types/auth'
 
-const ACTIONS = ['login_success', 'login_failure', 'logout', 'document_created', 'document_updated', 'document_archived', 'document_restored', 'document_deleted', 'document_opened', 'user_created', 'user_updated', 'user_role_changed', 'user_activated', 'user_deactivated', 'password_changed', 'backup_created', 'backup_verified', 'backup_restore_started', 'backup_restore_completed', 'backup_restore_failed']
+const ACTIONS = ['login_success', 'login_failure', 'logout', 'document_created', 'document_updated', 'document_archived', 'document_restored', 'document_deleted', 'document_opened', 'user_created', 'user_updated', 'user_role_changed', 'user_activated', 'user_deactivated', 'password_changed', 'backup_created', 'backup_verified', 'backup_restore_requested', 'backup_restore_started', 'backup_restore_completed', 'backup_restore_failed', 'backup_restore_rollback_started', 'backup_restore_rollback_completed']
 
 export function AuditLog({ token }: { token: string }) {
   const [logs, setLogs] = useState<AuditLogRecord[]>([]); const [action, setAction] = useState(''); const [userId, setUserId] = useState(''); const [entityType, setEntityType] = useState(''); const [from, setFrom] = useState(''); const [to, setTo] = useState(''); const [page, setPage] = useState(0); const [loading, setLoading] = useState(true); const [error, setError] = useState('')

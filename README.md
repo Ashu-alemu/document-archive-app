@@ -1,35 +1,79 @@
 # Document Archive
 
-Document Archive is a modern, offline-first desktop foundation for storing and searching organizational records such as letters, receipts, invoices, meeting documents, reports, certificates, contracts, scanned images, and PDFs.
+Document Archive is a desktop application that helps an organization keep its important files in one place. Users can save documents with useful details, search the archive, and open the original files when they need them.
 
-## Phase 1 — Project foundation
+## Project overview
 
-The project foundation is complete, including the Tauri desktop shell, React frontend, Rust native layer, and development tooling.
+**The problem:** Paper files and documents saved in different folders can be difficult to organize, find, and protect.
 
-## Technology stack
+**The solution:** Document Archive keeps document files and their details together in a searchable, locally stored archive. Access is controlled by user roles.
 
-- Tauri 2 desktop runtime
-- React 19, TypeScript 6, and Vite 8
-- pnpm package manager
-- SQLite through the official Tauri SQL plugin
-- Rust/Cargo for the native layer
-- Git for source control
+**Short presentation introduction:**
 
-## Development setup
+> Document Archive is an offline-first desktop application for organizing an organization’s documents. Users can add files with details such as title, date, category, department, and tags, then search the archive to find them again. The app also includes access controls, activity records, and backup and restore tools.
 
-Requirements:
+## How it works
 
-- Node.js 24+
-- pnpm 11+
-- Rust 1.77.2+ and Cargo
-- Linux Tauri prerequisites: `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, and a font package
-- OCR prerequisites: `tesseract-ocr` with the required language data and `poppler-utils` for PDF text extraction and scanned-PDF page rendering
+1. A user selects a department and signs in.
+2. The user adds a file and enters information that will help identify it.
+3. The app saves the file on the computer and its searchable details in a local SQLite database.
+4. Users search or filter the archive, view a document’s details, and open the file.
+5. Depending on their permissions, users can also manage documents, users, departments, backups, and archive settings.
 
-Install JavaScript dependencies and run the browser preview:
+## Main features
+
+- **Document archive:** Add supported files with a title, date, category, reference number, organization, department, description, and tags.
+- **Search and filters:** Search document details and extracted text; filter by category, tags, organization, date, or favorites.
+- **Document actions:** View and edit document details, open files in the computer’s default application, mark favorites, archive files, or delete them.
+- **Text extraction:** Use local OCR tools to extract searchable text from supported PDFs and images. OCR is optional; a document can still be saved if those tools are unavailable.
+- **Departments:** Select a department workspace. Administrators can manage departments and their users.
+- **Accounts and permissions:** Sign in with an account and use role-based permissions.
+- **Audit log and notifications:** Review recorded archive activity and relevant notifications.
+- **Backup and restore:** Create and verify local backups, then restore an archive from a backup.
+- **Automatic lock:** Lock an inactive session after a configurable period.
+
+### User roles
+
+| Role | Simple description |
+| --- | --- |
+| Administrator | Manages users and application-wide settings, and has access to administration tools. |
+| Manager | Manages documents for their work. |
+| Contributor | Adds and edits documents. |
+| Viewer | Searches, views, and opens documents. |
+
+Available actions can also depend on a user's department permissions.
+
+## Where files are stored
+
+The application stores document files and the database on the local computer. Document files are kept in the file system; SQLite stores their details and file paths. Files are not stored inside the database.
+
+The app also calculates a SHA-256 file hash to identify exact duplicate files. User passwords are stored as password hashes, not as plain text. OCR is performed locally when the required tools are installed. The app does not currently provide cloud synchronization.
+
+Backups are saved locally and include the database and managed document files. Keep backup files in a secure place, since they contain archived documents.
+
+## Technology
+
+- **React and TypeScript** build the user interface.
+- **Tauri and Rust** provide the desktop application and native file operations.
+- **SQLite** stores document details, users, and archive activity.
+- **Vite** runs and builds the frontend.
+- **Tesseract and Poppler** can provide local OCR and PDF text extraction.
+
+## Run the application
+
+### Requirements
+
+- Node.js and pnpm
+- Rust and Cargo
+- Desktop build tools required by Tauri for your operating system
+- Optional for OCR: Tesseract with the desired language data, and Poppler utilities
+
+### Start in development mode
+
+Install dependencies:
 
 ```bash
 pnpm install
-pnpm dev
 ```
 
 Run the desktop application:
@@ -38,115 +82,51 @@ Run the desktop application:
 pnpm tauri dev
 ```
 
-Build the production frontend and desktop bundle:
+To run only the frontend development server:
+
+```bash
+pnpm dev
+```
+
+The frontend server is useful for interface development; native desktop features require the Tauri application.
+
+### Build and checks
+
+Build the frontend:
 
 ```bash
 pnpm build
+```
+
+Build the desktop application:
+
+```bash
 pnpm tauri build
 ```
 
-Other checks:
+Run the linter:
 
 ```bash
 pnpm lint
-pnpm exec tsc -b
 ```
 
 ## Project structure
 
 ```text
 src/
-├── components/       # Document form, list, details, and filters
-├── pages/            # Feature pages (reserved for future extraction)
-├── layouts/          # Shared layouts (reserved)
-├── services/         # File selection, storage, and opening services
-├── database/         # SQLite connection and document repository
-├── types/            # Document domain types
-├── utils/            # Small utilities (reserved)
-├── hooks/            # React hooks (reserved)
-└── assets/           # Frontend assets
-src-tauri/             # Rust/Tauri configuration and native entrypoint
+├── components/       # Screens and reusable interface components
+├── database/         # SQLite repositories and data access
+├── services/         # Document and account workflows
+├── types/            # TypeScript data types
+└── App.tsx           # Main application and navigation
+
+src-tauri/
+├── src/              # Rust commands and desktop application code
+└── migrations/       # SQLite database changes
 ```
 
-## Phase 2 — Database & document storage
+## Current scope
 
-### Storage architecture
+Document Archive is a local desktop application. Its files and database are stored on the computer where it is used. It does not currently synchronize data between computers or provide a mobile application.
 
-Actual PDF, image, and other document files will live in the filesystem. SQLite will store metadata and paths; document binaries will not be stored inside SQLite.
-
-The planned application-data layout is:
-
-```text
-Application Data/
-├── database/
-│   └── documents.db
-├── storage/
-│   ├── letters/       ├── receipts/       ├── bills/
-│   ├── meetings/     ├── reports/        ├── certificates/
-│   ├── contracts/    ├── payments/       ├── photos/
-│   └── other/
-├── thumbnails/
-├── backups/
-└── logs/
-```
-
-The SQL connection module uses `sqlite:database/documents.db`. The Tauri SQL plugin resolves this relative path under the app’s OS-specific application-data/config location, not the source repository. On Linux this is currently under `~/.config/com.documentarchive.app/`; the equivalent OS-specific application-data directory is used elsewhere.
-
-At startup, the Rust layer creates the database, storage category, thumbnails, backups, and logs directories. Documents are copied into `storage/<category>/<year>/<month>/` using a generated managed filename. A temporary copy is finalized before its metadata is inserted into SQLite.
-
-### Database architecture
-
-SQLite stores document metadata, including title, date, type, reference number, organization, department, description, tags, original/stored filenames, path, MIME type, size, SHA-256 hash, timestamps, and active/archived status. Migration `src-tauri/migrations/0001_create_documents.sql` creates the `documents` table and indexes for status, type, date, and file hash. Document binaries are never stored in SQLite.
-
-## Phase 3 — Document management & search
-
-This phase adds document selection, extension and size validation, SHA-256 hashing, duplicate detection, managed filesystem storage, metadata insertion, document listing, parameterized search/filtering, details, metadata editing, OS-default file opening, and archive status without permanent deletion.
-
-Intentionally postponed: deletion, version history, AI features, cloud synchronization, and mobile applications.
-
-## Phase 4 — OCR & document opening
-
-When a document is saved, text-based PDFs are extracted with Poppler. Images and scanned PDFs are processed with the local Tesseract installation; OCR is best-effort, so a missing OCR runtime does not prevent the original document from being archived. Extracted text is stored in the `documents.ocr_text` SQLite column and is included in the existing search field. OCR is local and no document content is sent to an external service.
-
-## Phase 5 — Authentication & roles
-
-The application now requires a local account. On first launch, the setup wizard creates an administrator account. Passwords are hashed and verified in the Rust layer with Argon2id-compatible password hashes; plaintext passwords are never written to SQLite. The signed-in session exists only in application memory and is cleared on sign out.
-
-The local roles are Administrator, Manager, Contributor, and Viewer. Administrators can create additional users from Settings. Viewers can search, inspect, and open documents; contributors and managers can add/edit/archive documents; administrators also manage users. Existing document metadata, filesystem storage, OCR, and search migrations remain unchanged.
-
-## Phase 6 — Security, authorization & audit logging
-
-Rust/Tauri is the authority for authentication and authorization. The React layer holds only an opaque, memory-only session token. Every protected command resolves that token to the active user and current database role before allowing the operation; frontend roles and user IDs are never trusted. Logout clears the backend session and frontend state. The SQL plugin remains available to run startup migrations, but its frontend capability is removed and application repositories use authenticated Tauri commands.
-
-| Role | Documents | Users | Audit logs |
-| --- | --- | --- | --- |
-| Administrator | Full access | Create, update, delete, role/password changes | Read |
-| Manager | Create, edit, delete, view, search, open | None | None |
-| Contributor | Create, edit, view, search, open | None | None |
-| Viewer | View, search, open | None | None |
-
-Migration `0005_add_audit_logs.sql` adds newest-first indexed audit records. Backend operations create authentication, document, user, and password audit events. Passwords and authentication secrets are never included in audit details.
-
-Administrators have an Audit logs screen with action filtering, loading/error/empty states, and 25-record pagination. To test manually, create users for each role, sign in separately, attempt both allowed and forbidden document/user/audit actions, and confirm forbidden requests return backend authorization errors even when invoked outside the visible controls. Run `pnpm lint`, `pnpm build`, and `cargo test`/`cargo check` before packaging.
-
-## Phase 7 — Document organization & advanced search
-
-This phase is partially implemented. Existing functionality includes document categories/types, tags, full-text search across metadata and OCR text, type filtering, date-range filtering, and newest-first sorting. A dedicated advanced-search screen, user-selectable sorting, a rich multi-criteria search builder, and a separate category-management system are not currently implemented.
-
-## Phase 8 — Backup & Restore
-
-Phase 8 is implemented in the working tree and is awaiting final testing and commit. Administrators can create, verify, list, and restore local backups from the Backup & restore screen. A backup is a portable ZIP archive stored under the application-data `backups/` directory. It contains a SQLite snapshot at `database/documents.db`, every managed document under `storage/`, and a `manifest.json` with SHA-256 hashes and sizes for each included file. Backup creation verifies the archive before marking it verified.
-
-Restore validates the ZIP structure, rejects unsafe paths, verifies every manifest hash, stages the contents, preserves the current database and storage while installing the restored pair, and rolls back the filesystem swap when installation fails. Restore and verification are administrator-only Tauri commands. Backup history is stored in the `backup_history` table and is bounded to the newest 100 records in the UI. The backup archive itself is portable and can be copied to another compatible application-data backup location; it contains no plaintext export of passwords beyond the database’s existing Argon2 hashes.
-
-### Advanced archive & search
-
-The archive search builder combines metadata/OCR keyword search (matching all terms or any term) with category, tag, organization, document-date range, and favorites filters. Results can be sorted by document date, creation date, last update, title, category, or file size. Search input is debounced and result pages are capped at 50 records per request.
-
-Administrators can create, rename, and delete categories and tags from Categories & tags. Renaming a category also updates existing document records; a category still used by a document cannot be deleted. Tag rename and deletion update existing document metadata. Existing document types and comma-separated tags are retained and migrated into the managed catalogs.
-
-Favorites and recent opens are stored per local user. The dashboard shows recently opened documents, and Favorites provides a dedicated filtered view. Migration `0008_advanced_archive.sql` adds the catalogs, per-user activity tables, and browse indexes while preserving the existing document schema.
-
-## Git and private data
-
-The repository contains source code and configuration only. Database files, uploaded documents, storage folders, thumbnails, backups, logs, build output, temporary files, and secrets are ignored by `.gitignore`.
+Supported file types include PDF, JPG/JPEG, PNG, WebP, DOC, DOCX, and TXT. The current maximum file size is 100 MB. Text extraction depends on the local OCR/PDF tools and may not be available on every computer.

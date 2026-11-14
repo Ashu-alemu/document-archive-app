@@ -33,6 +33,27 @@ const STORAGE_CATEGORIES: &[&str] = &[
     "other",
 ];
 
+pub(crate) fn registered_migrations() -> Vec<Migration> {
+    vec![
+        Migration { version: 1, description: "create_documents", sql: include_str!("../migrations/0001_create_documents.sql"), kind: MigrationKind::Up },
+        Migration { version: 2, description: "add_ocr_text", sql: include_str!("../migrations/0002_add_ocr_text.sql"), kind: MigrationKind::Up },
+        Migration { version: 3, description: "add_ocr_status", sql: include_str!("../migrations/0003_add_ocr_status.sql"), kind: MigrationKind::Up },
+        Migration { version: 4, description: "add_authentication", sql: include_str!("../migrations/0004_add_authentication.sql"), kind: MigrationKind::Up },
+        Migration { version: 5, description: "add_audit_logs", sql: include_str!("../migrations/0005_add_audit_logs.sql"), kind: MigrationKind::Up },
+        Migration { version: 6, description: "harden_audit_indexes", sql: include_str!("../migrations/0006_harden_audit_indexes.sql"), kind: MigrationKind::Up },
+        Migration { version: 7, description: "add_backup_history", sql: include_str!("../migrations/0007_add_backup_history.sql"), kind: MigrationKind::Up },
+        Migration { version: 8, description: "advanced_archive", sql: include_str!("../migrations/0008_advanced_archive.sql"), kind: MigrationKind::Up },
+        Migration { version: 9, description: "add_notifications", sql: include_str!("../migrations/0009_add_notifications.sql"), kind: MigrationKind::Up },
+        Migration { version: 10, description: "add_security_preferences", sql: include_str!("../migrations/0010_add_security_preferences.sql"), kind: MigrationKind::Up },
+        Migration { version: 11, description: "add_departments", sql: include_str!("../migrations/0011_add_departments.sql"), kind: MigrationKind::Up },
+        Migration { version: 12, description: "add_department_roles", sql: include_str!("../migrations/0012_add_department_roles.sql"), kind: MigrationKind::Up },
+    ]
+}
+
+pub(crate) fn current_migration_version() -> i64 {
+    registered_migrations().iter().map(|migration| migration.version).max().unwrap_or(0)
+}
+
 #[derive(Serialize)]
 pub struct FileInspection {
     file_name: String,
@@ -377,65 +398,7 @@ fn remove_stored_file(app: AppHandle, state: State<'_, SessionState>, token: Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![
-        Migration {
-            version: 1,
-            description: "create_documents",
-            sql: include_str!("../migrations/0001_create_documents.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "add_ocr_text",
-            sql: include_str!("../migrations/0002_add_ocr_text.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "add_ocr_status",
-            sql: include_str!("../migrations/0003_add_ocr_status.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "add_authentication",
-            sql: include_str!("../migrations/0004_add_authentication.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "add_audit_logs",
-            sql: include_str!("../migrations/0005_add_audit_logs.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "harden_audit_indexes",
-            sql: include_str!("../migrations/0006_harden_audit_indexes.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 7,
-            description: "add_backup_history",
-            sql: include_str!("../migrations/0007_add_backup_history.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 8,
-            description: "advanced_archive",
-            sql: include_str!("../migrations/0008_advanced_archive.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 9,
-            description: "add_notifications",
-            sql: include_str!("../migrations/0009_add_notifications.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration { version: 10, description: "add_security_preferences", sql: include_str!("../migrations/0010_add_security_preferences.sql"), kind: MigrationKind::Up },
-        Migration { version: 11, description: "add_departments", sql: include_str!("../migrations/0011_add_departments.sql"), kind: MigrationKind::Up },
-        Migration { version: 12, description: "add_department_roles", sql: include_str!("../migrations/0012_add_department_roles.sql"), kind: MigrationKind::Up },
-    ];
+    let migrations = registered_migrations();
     tauri::Builder::default()
         .manage(SessionState::default())
         .setup(|app| {
